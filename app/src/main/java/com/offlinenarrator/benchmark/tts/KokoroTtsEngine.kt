@@ -1,0 +1,69 @@
+package com.offlinenarrator.benchmark.tts
+
+import android.content.Context
+import com.offlinenarrator.benchmark.model.KokoroModelStore
+import dev.ffmpegkit.kokoro.KokoroConfig
+import dev.ffmpegkit.kokoro.KokoroTTS
+import java.io.File
+
+class KokoroTtsEngine(
+    private val context: Context,
+    private val modelStore: KokoroModelStore,
+) : TtsEngine {
+
+    override val id: String = "kokoro"
+    override val displayName: String = "Kokoro 82M (local)"
+    override val description: String = "Phase-0 neural benchmark. Runs fully on-device after the ONNX model is imported."
+
+    private var ready = false
+
+    override suspend fun initialize(): Result<Unit> = runCatching {
+        check(modelStore.exists()) { "Import a Kokoro ONNX model first" }
+        runCatching { KokoroTTS.release() }
+        KokoroTTS.initialize(context.applicationContext, modelStore.modelFile.absolutePath)
+        ready = true
+    }.onFailure {
+        ready = false
+        runCatching { KokoroTTS.release() }
+    }
+
+    override fun isReady(): Boolean = ready
+
+    override fun voices(): List<TtsVoice> = if (!ready) emptyList() else {
+        KokoroTTS.getAvailableVoices().map {
+            TtsVoice(id = it.id, name = it.name, language = it.language)
+        }
+    }
+
+    override suspend fun synthesize(request: SpeechRequest): Result<SynthesisResult> = runCatching {
+        check(ready) { "Kokoro is not initialized" }
+        check(request.text.isNotBlank()) { "Text is empty" }
+
+        request.voiceId?.let { requested ->
+            KokoroTTS.getAvailableVoices().firstOrNull { it.id == requested }?.let(KokoroTTS::setVoice)
+        }
+
+        val started = System.nanoTime()
+        val result = KokoroTTS.speak(
+            request.text,
+            KokoroConfig(speed = request.speed.coerceIn(0.5f, 2.0f)),
+        )
+        val generationMs = (System.nanoTime() - started) / 1_000_000L
+
+        val outDir = File(context.cacheDir, "benchmark-audio").apply { mkdirs() }
+        val output = File(outDir, "kokoro-${System.currentTimeMillis()}.wav")
+        output.writeBytes(result.audioData)
+
+        SynthesisResult(
+            audioFile = output,
+            audioDurationMs = result.durationMs,
+            generationTimeMs = generationMs,
+            sampleRate = result.sampleRate,
+        )
+    }
+
+    override fun release() {
+        ready = false
+        runCatching { KokoroTTS.release() }
+    }
+}
