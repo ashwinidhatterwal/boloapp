@@ -37,7 +37,10 @@ class SystemTtsEngine(
     override fun isReady(): Boolean = ready && tts != null
 
     override fun voices(): List<TtsVoice> = tts?.voices
-        ?.sortedBy { it.name }
+        ?.sortedWith(
+            compareBy<android.speech.tts.Voice> { voicePriority(it.locale?.toLanguageTag()) }
+                .thenBy { it.name }
+        )
         ?.map { voice ->
             TtsVoice(
                 id = voice.name,
@@ -46,6 +49,17 @@ class SystemTtsEngine(
             )
         }
         .orEmpty()
+
+    private fun voicePriority(tag: String?): Int {
+        val normalized = tag?.lowercase().orEmpty()
+        return when {
+            normalized == "en-in" -> 0
+            normalized == "en-us" -> 1
+            normalized == "en-gb" -> 2
+            normalized.startsWith("en-") || normalized == "en" -> 3
+            else -> 10
+        }
+    }
 
     override suspend fun synthesize(request: SpeechRequest): Result<SynthesisResult> = runCatching {
         val engine = checkNotNull(tts) { "Android TTS is not initialized" }

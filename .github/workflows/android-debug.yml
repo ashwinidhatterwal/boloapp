@@ -55,6 +55,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KOKORO_COMMIT"
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
+
+          # Stage the official af_heart voicepack before building the AAR.
+          mkdir -p library/src/main/assets/voices
+          curl -L --fail --retry 3 \
+            -o library/src/main/assets/voices/af_heart.bin \
+            "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/af_heart.bin?download=true"
+          echo "d583ccff3cdca2f7fae535cb998ac07e9fcb90f09737b9a41fa2734ec44a8f0b  library/src/main/assets/voices/af_heart.bin" \
+            | sha256sum -c -
+
           ./gradlew :library:assembleRelease --stacktrace
 
           AAR="$(find library/build/outputs/aar -name '*-release.aar' | head -1)"
@@ -64,6 +73,8 @@ jobs:
 
           unzip -l "$GITHUB_WORKSPACE/app/libs/kokoro-android.aar" \
             | grep -q "libkokoro_jni.so"
+          unzip -l "$GITHUB_WORKSPACE/app/libs/kokoro-android.aar" \
+            | grep -q "assets/voices/af_heart.bin"
 
       - name: Set up Gradle 9.6
         uses: gradle/actions/setup-gradle@v4
