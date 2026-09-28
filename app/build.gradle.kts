@@ -65,7 +65,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     // Phase-0 prototype adapter only. The production engine remains replaceable.
-    implementation("dev.ffmpegkit-maintained:kokoro-android:0.1.0")
+    // Phase-0 Kokoro AAR is built from upstream source by GitHub Actions.
+    implementation(files("libs/kokoro-android.aar"))
+    // A local AAR does not carry Maven transitive dependencies, so declare them here.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    implementation("androidx.core:core-ktx:1.13.1")
 
     testImplementation("junit:junit:4.13.2")
 }
