@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.offlinenarrator.benchmark"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.offlinenarrator.benchmark"
