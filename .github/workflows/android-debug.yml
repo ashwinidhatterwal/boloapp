@@ -36,37 +36,58 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build espeak-ng-data
 
-      # Kokoro's README documents the Maven coordinate, but the artifact was not
-      # resolvable in our CI run. Build the free AAR from the upstream source
-      # instead so Phase 0 is reproducible and does not depend on publication state.
-      - name: Build Kokoro Android AAR from source
+      - name: Build pinned Kokoro Android AAR from source
         run: |
           set -euo pipefail
+          KOKORO_COMMIT="593e2353954498b667e3bf3489a61723e6ba6b59"
+
           rm -rf .deps/kokoro-android
-          mkdir -p .deps app/libs
-          git clone --recursive --depth 1 \
-            https://github.com/ffmpegkit-maintained/kokoro-android.git \
-            .deps/kokoro-android
+          mkdir -p .deps/kokoro-android app/libs
+
+          git -C .deps/kokoro-android init
+          git -C .deps/kokoro-android remote add origin \
+            https://github.com/ffmpegkit-maintained/kokoro-android.git
+          git -C .deps/kokoro-android fetch --depth=1 origin "$KOKORO_COMMIT"
+          git -C .deps/kokoro-android checkout --detach FETCH_HEAD
+          git -C .deps/kokoro-android submodule update --init --recursive --depth 1
+
           cd .deps/kokoro-android
+          test "$(git rev-parse HEAD)" = "$KOKORO_COMMIT"
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
           ./gradlew :library:assembleRelease --stacktrace
+
           AAR="$(find library/build/outputs/aar -name '*-release.aar' | head -1)"
           test -n "$AAR"
           test -f "$AAR"
           cp "$AAR" "$GITHUB_WORKSPACE/app/libs/kokoro-android.aar"
-          unzip -l "$GITHUB_WORKSPACE/app/libs/kokoro-android.aar" | grep -q "libkokoro_jni.so"
+
+          unzip -l "$GITHUB_WORKSPACE/app/libs/kokoro-android.aar" \
+            | grep -q "libkokoro_jni.so"
 
       - name: Set up Gradle 9.6
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.6.0"
 
-      - name: Unit tests
-        run: gradle :app:testDebugUnitTest --stacktrace
+      # Deliberately request metadata checking, Kotlin compilation, tests and APK assembly
+      # together. --continue lets Gradle report independent failures in one run instead
+      # of hiding the next error behind the first failed task.
+      - name: Verify compile, tests and APK
+        run: |
+          gradle \
+            :app:checkDebugAarMetadata \
+            :app:compileDebugKotlin \
+            :app:testDebugUnitTest \
+            :app:assembleDebug \
+            --continue \
+            --stacktrace
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      # Lint is useful during Phase 0, but should not block us from receiving a compiled
+      # benchmark APK if the app itself builds.
+      - name: Android lint
+        continue-on-error: true
+        run: gradle :app:lintDebug --continue --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
