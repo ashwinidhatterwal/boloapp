@@ -1,5 +1,37 @@
 from pathlib import Path
 
+
+# Local Bolo builds only need :library:assembleRelease.
+# Strip Kokoro's Maven Central publishing plugin/config so CI does not depend
+# on com.vanniktech.maven.publish just to create a local AAR.
+root_build = Path("build.gradle.kts")
+root_code = root_build.read_text()
+publish_root_line = "    alias(libs.plugins.vanniktech.publish) apply false\n"
+if publish_root_line in root_code:
+    root_code = root_code.replace(publish_root_line, "")
+root_build.write_text(root_code)
+
+library_build = Path("library/build.gradle.kts")
+library_code = library_build.read_text()
+publish_library_line = "    alias(libs.plugins.vanniktech.publish)\n"
+if publish_library_line in library_code:
+    library_code = library_code.replace(publish_library_line, "")
+
+publish_marker = "\nmavenPublishing {"
+publish_index = library_code.find(publish_marker)
+if publish_index >= 0:
+    # mavenPublishing is the final top-level block in the pinned upstream file.
+    library_code = library_code[:publish_index].rstrip() + "\n"
+
+library_build.write_text(library_code)
+
+# Fail early if the unnecessary publishing plugin is still referenced by a
+# build script. (The version-catalog declaration itself is harmless when unused.)
+remaining = root_build.read_text() + "\n" + library_build.read_text()
+if "libs.plugins.vanniktech.publish" in remaining or "mavenPublishing {" in remaining:
+    raise SystemExit("Failed to strip Kokoro Maven publishing configuration")
+
+
 versions = Path("gradle/libs.versions.toml")
 text = versions.read_text()
 old = 'onnxruntime = "1.20.0"'

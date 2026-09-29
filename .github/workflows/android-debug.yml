@@ -56,6 +56,10 @@ jobs:
 
           python3 "$GITHUB_WORKSPACE/scripts/patch_kokoro_runtime.py"
 
+          # Local AAR builds must not resolve the Maven publishing plugin.
+          ! grep -R "libs.plugins.vanniktech.publish" build.gradle.kts library/build.gradle.kts
+          ! grep -R "mavenPublishing" library/build.gradle.kts
+
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
 
@@ -100,6 +104,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: boloapp-phase0-v0.10-kitten-arm64
+          name: boloapp-phase0-v0.10.1-kitten-arm64-ci-fixed
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

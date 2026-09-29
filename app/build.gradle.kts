@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 6
-        versionName = "0.1.4-phase0-kitten-arm64"
+        versionCode = 7
+        versionName = "0.1.4.1-phase0-kitten-arm64-ci-fixed"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
