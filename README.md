@@ -1,16 +1,19 @@
-# Bolo — Phase 0 Voice Lab
+# Bolo
 
-Current checkpoint: **v0.16 Supertonic clean trial**
+Current checkpoint: **v0.17 Kokoro Reader Prototype**
 
-The repository builds two APKs:
+Bolo is now Kokoro-only. The app turns pasted text into rolling locally
+generated narration and starts playback before all text is synthesized.
 
-- `Bolo-v0.16.apk` — clean Kokoro vs Supertonic benchmark UI.
-- `Bolo-Supertonic-Engine-v0.1.apk` — companion Supertonic 3 LiteRT engine.
+Key prototype features:
+- offline Kokoro narration
+- rolling generation + local cache
+- 1.0x–2.0x playback speed
+- thermal-aware synthesis pause
+- long-text segmentation
+- clean reader UI
 
-Install the companion engine, open it once, tap **Download / verify model**, then
-return to Bolo and compare the same narration passage with both engines.
+Build artifact:
+`bolo-v0.17-kokoro-reader`
 
-Bolo itself remains offline and has no network permission. The companion engine
-uses network access only to fetch its model; synthesis is local afterward.
-
-See `PHASE0_V0.16_CHECKPOINT.md`.
+See `BOLO_V0.17_CHECKPOINT.md`.

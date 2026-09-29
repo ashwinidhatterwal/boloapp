@@ -1,6 +1,5 @@
 package com.offlinenarrator.benchmark.ui
 
-import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +19,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -33,23 +33,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.offlinenarrator.benchmark.benchmark.BenchmarkUiState
 import com.offlinenarrator.benchmark.benchmark.BenchmarkViewModel
-import com.offlinenarrator.benchmark.tts.SupertonicTtsEngine
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     var details by remember { mutableStateOf(false) }
 
-    val kokoroPicker = rememberLauncherForActivityResult(
+    val modelPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri -> uri?.let(viewModel::importKokoroModel) },
     )
@@ -59,9 +56,9 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Bolo Voice Lab")
+                        Text("Bolo")
                         Text(
-                            "Kokoro vs Supertonic",
+                            "Offline natural reader",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -78,81 +75,80 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            EnginePicker(
-                state = state,
-                onKokoro = { viewModel.selectEngine("kokoro") },
-                onSupertonic = { viewModel.selectEngine("supertonic") },
-                onImportKokoro = {
-                    kokoroPicker.launch(arrayOf("application/octet-stream", "*/*"))
-                },
-                onOpenSupertonic = { openSupertonicSetup(context) },
-            )
+            if (!state.kokoroModelPresent) {
+                ModelSetupCard(
+                    state = state,
+                    onImport = {
+                        modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
+                    },
+                )
+            } else {
+                ReaderStatusCard(state)
 
-            OutlinedTextField(
-                value = state.text,
-                onValueChange = viewModel::setText,
-                label = { Text("Narration text") },
-                minLines = 6,
-                modifier = Modifier.fillMaxWidth(),
-            )
+                OutlinedTextField(
+                    value = state.text,
+                    onValueChange = viewModel::setText,
+                    enabled = !state.readerStarted,
+                    label = { Text("Text to read") },
+                    minLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
-            TextButton(onClick = viewModel::useSample) {
-                Text("Use standard narration sample")
-            }
-
-            VoicePicker(
-                state = state,
-                onVoice = viewModel::selectVoice,
-            )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = viewModel::synthesize,
-                    enabled = state.isReady &&
-                        !state.isSynthesizing &&
-                        state.text.isNotBlank(),
-                ) {
-                    Text(if (state.isSynthesizing) "Generating…" else "Generate")
-                }
-
-                OutlinedButton(
-                    onClick = viewModel::playResult,
-                    enabled = state.result != null && !state.isPlaying,
-                ) {
-                    Text("Play")
-                }
-
-                if (state.isPlaying) {
-                    TextButton(onClick = viewModel::stopPlayback) {
-                        Text("Stop")
+                if (!state.readerStarted) {
+                    TextButton(onClick = viewModel::useSample) {
+                        Text("Use long reading sample")
                     }
                 }
-            }
 
-            if (state.isSynthesizing) {
-                TextButton(onClick = viewModel::cancelSynthesis) {
-                    Text("Cancel")
-                }
-            }
-
-            state.result?.let {
-                ResultCard(state)
-            }
-
-            state.error?.let {
-                Text(
-                    it,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
+                VoicePicker(
+                    state = state,
+                    onVoice = viewModel::selectVoice,
                 )
-            }
 
-            TextButton(onClick = { details = !details }) {
-                Text(if (details) "Hide details" else "Details")
-            }
+                PlaybackSpeedPicker(
+                    selected = state.playbackSpeed,
+                    onSelect = viewModel::setPlaybackSpeed,
+                )
 
-            if (details) {
-                DetailsCard(state)
+                ReaderControls(
+                    state = state,
+                    onStart = viewModel::startReading,
+                    onPauseResume = viewModel::pauseOrResume,
+                    onStop = viewModel::stopReading,
+                )
+
+                if (state.totalSegments > 0) {
+                    val progress = if (state.totalSegments == 0) {
+                        0f
+                    } else {
+                        (state.currentSegment.toFloat() / state.totalSegments.toFloat())
+                            .coerceIn(0f, 1f)
+                    }
+
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                state.error?.let {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                TextButton(onClick = { details = !details }) {
+                    Text(if (details) "Hide details" else "Details")
+                }
+
+                if (details) {
+                    DetailsCard(
+                        state = state,
+                        onClearCache = viewModel::clearPreparedAudio,
+                    )
+                }
             }
 
             Spacer(Modifier.height(16.dp))
@@ -161,56 +157,70 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
 }
 
 @Composable
-private fun EnginePicker(
+private fun ModelSetupCard(
     state: BenchmarkUiState,
-    onKokoro: () -> Unit,
-    onSupertonic: () -> Unit,
-    onImportKokoro: () -> Unit,
-    onOpenSupertonic: () -> Unit,
+    onImport: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Voice engine", fontWeight = FontWeight.Bold)
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = state.selectedEngineId == "kokoro",
-                    onClick = onKokoro,
-                    label = { Text("Kokoro") },
-                )
-                FilterChip(
-                    selected = state.selectedEngineId == "supertonic",
-                    onClick = onSupertonic,
-                    label = { Text("Supertonic 3") },
-                )
-            }
-
-            Text(state.engineName, fontWeight = FontWeight.SemiBold)
+            Text("Kokoro model required", fontWeight = FontWeight.Bold)
             Text(
-                state.engineDescription,
-                style = MaterialTheme.typography.bodySmall,
+                "Import the Kokoro FP32 ONNX model once. Bolo then reads locally without cloud credits or per-minute limits.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
+            Button(
+                onClick = onImport,
+                enabled = !state.isPreparing,
+            ) {
+                Text(if (state.isPreparing) "Importing…" else "Import Kokoro model")
+            }
             Text(
                 state.status,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            if (state.selectedEngineId == "kokoro" && !state.kokoroModelPresent) {
-                Button(onClick = onImportKokoro) {
-                    Text("Import Kokoro model")
-                }
+            state.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
             }
+        }
+    }
+}
 
-            if (state.selectedEngineId == "supertonic" && !state.isReady) {
-                OutlinedButton(onClick = onOpenSupertonic) {
-                    Text("Open Supertonic setup")
-                }
+@Composable
+private fun ReaderStatusCard(state: BenchmarkUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                when {
+                    state.finished -> "Finished"
+                    state.thermalPaused -> "Cooling"
+                    state.isPlaying -> "Reading"
+                    state.isPaused -> "Paused"
+                    state.isGenerating -> "Preparing"
+                    else -> "Ready"
+                },
+                fontWeight = FontWeight.Bold,
+            )
+
+            Text(
+                state.status,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            if (state.readerStarted || state.finished) {
+                val readySeconds = state.bufferedListeningMs / 1000
+                Text(
+                    "Ready ahead: ${readySeconds}s · " +
+                        "segment ${state.currentSegment.coerceAtLeast(0)}/${state.totalSegments}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
@@ -225,11 +235,12 @@ private fun VoicePicker(
 
     var expanded by remember { mutableStateOf(false) }
     val selected = state.voices.firstOrNull { it.id == state.selectedVoiceId }
-    val label = selected?.name ?: "Choose voice"
+    val label = selected?.name ?: "Voice"
 
     Box {
         OutlinedButton(
             onClick = { expanded = true },
+            enabled = !state.readerStarted,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Voice · $label")
@@ -253,51 +264,79 @@ private fun VoicePicker(
 }
 
 @Composable
-private fun ResultCard(state: BenchmarkUiState) {
-    val result = state.result ?: return
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("Result", fontWeight = FontWeight.Bold)
-            Metric("Generation", formatDuration(result.generationTimeMs))
-            Metric("Audio", formatDuration(result.audioDurationMs))
-            Metric("RTF", String.format(Locale.US, "%.3f", result.realTimeFactor))
-            Metric(
-                "Generation speed",
-                String.format(Locale.US, "%.2f× realtime", result.generatedRealtimeMultiple),
-            )
-
-            Text(
-                if (result.realTimeFactor < 1.0) {
-                    "Faster than playback"
-                } else {
-                    "Slower than playback"
-                },
-                color = if (result.realTimeFactor < 1.0) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-                style = MaterialTheme.typography.bodySmall,
-            )
+private fun PlaybackSpeedPicker(
+    selected: Float,
+    onSelect: (Float) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Playback speed", fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(1.0f, 1.25f, 1.5f).forEach { speed ->
+                FilterChip(
+                    selected = selected == speed,
+                    onClick = { onSelect(speed) },
+                    label = { Text(formatSpeed(speed)) },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(1.75f, 2.0f).forEach { speed ->
+                FilterChip(
+                    selected = selected == speed,
+                    onClick = { onSelect(speed) },
+                    label = { Text(formatSpeed(speed)) },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun DetailsCard(state: BenchmarkUiState) {
+private fun ReaderControls(
+    state: BenchmarkUiState,
+    onStart: () -> Unit,
+    onPauseResume: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!state.readerStarted) {
+            Button(
+                onClick = onStart,
+                enabled = state.isReady && !state.isPreparing && state.text.isNotBlank(),
+            ) {
+                Text(if (state.finished) "Read again" else "Start reading")
+            }
+        } else {
+            Button(onClick = onPauseResume) {
+                Text(if (state.isPaused) "Resume" else "Pause")
+            }
+
+            OutlinedButton(onClick = onStop) {
+                Text("Stop")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailsCard(
+    state: BenchmarkUiState,
+    onClearCache: () -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("Details", fontWeight = FontWeight.Bold)
-            state.result?.sampleRate?.let {
-                Metric("Sample rate", "$it Hz")
+            Text("Reader details", fontWeight = FontWeight.Bold)
+            Metric("Generated", "${state.generatedSegments}/${state.totalSegments}")
+            Metric("Cache hits", state.cacheHits.toString())
+            state.meanGenerationRtf?.let {
+                Metric("Mean generation RTF", String.format(Locale.US, "%.3f", it))
             }
+            Metric("Playback gaps", state.underruns.toString())
+            Metric("Prepared audio cache", formatBytes(state.cacheBytes))
+
             state.deviceSnapshot?.let { d ->
                 Metric(
                     "Battery",
@@ -306,17 +345,20 @@ private fun DetailsCard(state: BenchmarkUiState) {
                     } ?: "Unavailable",
                 )
                 Metric("Thermal", d.thermalStatus)
-                Metric("Device", d.device)
             }
+
             Text(
-                if (state.selectedEngineId == "supertonic") {
-                    "Supertonic runs in the companion engine process, so this screen intentionally does not show misleading Bolo-process memory numbers."
-                } else {
-                    "Kokoro uses the fixed CPU ALL_OPT / 8-thread profile from the previous benchmark."
-                },
+                "Bolo generates short narration segments, keeps a rolling reserve, reuses cached audio, and pauses new synthesis if Android reports severe thermal pressure.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            TextButton(
+                onClick = onClearCache,
+                enabled = !state.readerStarted,
+            ) {
+                Text("Clear prepared audio")
+            }
         }
     }
 }
@@ -327,21 +369,31 @@ private fun Metric(label: String, value: String) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontWeight = FontWeight.Medium)
+        Text(
+            label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            value,
+            fontWeight = FontWeight.Medium,
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 
-private fun openSupertonicSetup(context: Context) {
-    val intent = context.packageManager
-        .getLaunchIntentForPackage(SupertonicTtsEngine.ENGINE_PACKAGE)
-        ?: return
-    context.startActivity(intent)
-}
-
-private fun formatDuration(ms: Long): String =
-    if (ms >= 1000L) {
-        String.format(Locale.US, "%.2f s", ms / 1000.0)
+private fun formatSpeed(value: Float): String =
+    if (value == value.toInt().toFloat()) {
+        "${value.toInt()}.0×"
     } else {
-        "$ms ms"
+        "${value}×"
     }
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L ->
+        String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L ->
+        String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    else ->
+        String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+}

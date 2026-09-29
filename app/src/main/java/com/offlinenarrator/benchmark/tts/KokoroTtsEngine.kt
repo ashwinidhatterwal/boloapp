@@ -14,8 +14,8 @@ class KokoroTtsEngine(
 ) : TtsEngine {
 
     override val id: String = "kokoro"
-    override val displayName: String = "Kokoro 82M (local)"
-    override val description: String = "Phase-0 neural benchmark. Runs fully on-device after the ONNX model is imported."
+    override val displayName: String = "Kokoro 82M"
+    override val description: String = "Natural on-device narration."
 
     private var ready = false
 
@@ -56,7 +56,7 @@ class KokoroTtsEngine(
         )
         val generationMs = (System.nanoTime() - started) / 1_000_000L
 
-        val outDir = File(context.cacheDir, "benchmark-audio").apply { mkdirs() }
+        val outDir = File(context.cacheDir, "reader-render").apply { mkdirs() }
         val output = File(outDir, "kokoro-${System.currentTimeMillis()}.wav")
         output.writeBytes(result.audioData)
 

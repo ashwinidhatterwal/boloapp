@@ -106,26 +106,22 @@ jobs:
             :app:checkDebugAarMetadata \
             :app:compileDebugKotlin \
             :app:testDebugUnitTest \
-            :app:assembleDebug \
-            :supertonic-engine:compileDebugKotlin \
-            :supertonic-engine:assembleDebug \
-            --continue \
+            :app:assembleDebug \            --continue \
             --stacktrace
 
       - name: Android lint
         continue-on-error: true
         run: gradle :app:lintDebug --continue --stacktrace
 
-      - name: Stage APKs
+      - name: Stage APK
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.16.apk
-          cp supertonic-engine/build/outputs/apk/debug/supertonic-engine-debug.apk             build-artifacts/Bolo-Supertonic-Engine-v0.1.apk
+          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.17-Kokoro-Reader.apk
 
-      - name: Upload APKs
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.16.1-supertonic-ci-fixed
-          path: build-artifacts/*.apk
+          name: bolo-v0.17-kokoro-reader
+          path: build-artifacts/Bolo-v0.17-Kokoro-Reader.apk
           if-no-files-found: error

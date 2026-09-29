@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 14
-        versionName = "0.2.0.1-phase0-supertonic-ci-fixed"
+        versionCode = 17
+        versionName = "0.3.0-kokoro-reader-prototype"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -79,6 +79,7 @@ dependencies {
     // A local AAR does not carry Maven transitive dependencies, so declare them here.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
 
     testImplementation("junit:junit:4.13.2")
 }
