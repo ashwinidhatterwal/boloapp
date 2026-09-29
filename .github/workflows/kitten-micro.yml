@@ -1,0 +1,237 @@
+name: Build KittenTTS Micro Engine
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "develop" ]
+    paths:
+      - ".github/workflows/kitten-micro.yml"
+      - "docs/KITTEN_MICRO_TEST.md"
+
+jobs:
+  kitten-micro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Bolo repo
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install Android and host build dependencies
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.0.12077973" \
+            "cmake;3.22.1"
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            make \
+            gcc \
+            g++ \
+            ninja-build \
+            pkg-config
+
+      - name: Fetch pinned Kitten Android engine
+        run: |
+          set -euo pipefail
+          KITTEN_COMMIT="e779f26498bb0d81294340ff565e321284a0abc8"
+
+          rm -rf .deps/kittentts-android
+          mkdir -p .deps/kittentts-android
+
+          git -C .deps/kittentts-android init
+          git -C .deps/kittentts-android remote add origin \
+            https://github.com/gyanendra-baghel/kittentts-android.git
+          git -C .deps/kittentts-android fetch --depth=1 origin "$KITTEN_COMMIT"
+          git -C .deps/kittentts-android checkout --detach FETCH_HEAD
+
+          test "$(git -C .deps/kittentts-android rev-parse HEAD)" = "$KITTEN_COMMIT"
+
+      - name: Fetch pinned espeak-ng 1.52.0
+        run: |
+          set -euo pipefail
+
+          rm -rf .deps/kittentts-android/app/src/main/cpp/espeak-ng
+
+          git clone \
+            --depth 1 \
+            --branch 1.52.0 \
+            https://github.com/espeak-ng/espeak-ng.git \
+            .deps/kittentts-android/app/src/main/cpp/espeak-ng
+
+          test "$(git -C .deps/kittentts-android/app/src/main/cpp/espeak-ng describe --tags --exact-match)" = "1.52.0"
+
+      - name: Build English espeak-ng data
+        run: |
+          set -euo pipefail
+
+          ESPEAK_DIR="$GITHUB_WORKSPACE/.deps/kittentts-android/app/src/main/cpp/espeak-ng"
+          ASSETS_DIR="$GITHUB_WORKSPACE/.deps/kittentts-android/app/src/main/assets/espeak-ng-data"
+
+          cmake \
+            -S "$ESPEAK_DIR" \
+            -B "$ESPEAK_DIR/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_MBROLA=OFF \
+            -DUSE_LIBSONIC=OFF \
+            -DUSE_LIBPCAUDIO=OFF \
+            -DUSE_ASYNC=OFF \
+            -DENABLE_TESTS=OFF
+
+          cmake --build "$ESPEAK_DIR/build" -j2
+
+          ESPEAK_BUILD="$ESPEAK_DIR/build/espeak-ng-data"
+
+          test -f "$ESPEAK_BUILD/phondata"
+          test -f "$ESPEAK_BUILD/phonindex"
+          test -f "$ESPEAK_BUILD/phontab"
+          test -f "$ESPEAK_BUILD/en_dict"
+
+          mkdir -p "$ASSETS_DIR/lang/gmw"
+
+          cp \
+            "$ESPEAK_BUILD/phondata" \
+            "$ESPEAK_BUILD/phonindex" \
+            "$ESPEAK_BUILD/phontab" \
+            "$ESPEAK_BUILD/phondata-manifest" \
+            "$ESPEAK_BUILD/intonations" \
+            "$ESPEAK_BUILD/en_dict" \
+            "$ASSETS_DIR/"
+
+          cp "$ESPEAK_BUILD"/lang/gmw/en* "$ASSETS_DIR/lang/gmw/"
+          cp -r "$ESPEAK_BUILD/voices" "$ASSETS_DIR/"
+
+      - name: Stage official KittenTTS Micro model
+        run: |
+          set -euo pipefail
+
+          MODEL_DIR="$GITHUB_WORKSPACE/.deps/kittentts-android/app/src/main/assets/model"
+          mkdir -p "$MODEL_DIR"
+
+          curl -L --fail --retry 4 --retry-all-errors \
+            -o "$MODEL_DIR/kitten_tts.onnx" \
+            "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/kitten_tts_micro_v0_8.onnx?download=true"
+
+          curl -L --fail --retry 4 --retry-all-errors \
+            -o "$MODEL_DIR/voices.npz" \
+            "https://huggingface.co/KittenML/kitten-tts-micro-0.8/resolve/main/voices.npz?download=true"
+
+          echo "95481626fee1ba70ce683e69c534fc7cb38433c46ce42d3abbeafb4b9f1a4123  $MODEL_DIR/kitten_tts.onnx" \
+            | sha256sum -c -
+          echo "112710c1be8ad0e967c190fb0fd95cbe5848ec4791b93209f20b28b7da20dac1  $MODEL_DIR/voices.npz" \
+            | sha256sum -c -
+
+          cat > "$MODEL_DIR/config.json" <<'EOF'
+          {
+            "name": "Kitten TTS Micro",
+            "version": "0.8",
+            "type": "ONNX2",
+            "model": "kitten-tts-micro-0.8",
+            "voices": "voices.npz",
+            "model_file": "kitten_tts_micro_v0_8.onnx",
+            "speed_priors": {},
+            "voice_aliases": {
+              "Bella": "expr-voice-2-f",
+              "Jasper": "expr-voice-2-m",
+              "Luna": "expr-voice-3-f",
+              "Bruno": "expr-voice-3-m",
+              "Rosie": "expr-voice-4-f",
+              "Hugo": "expr-voice-4-m",
+              "Kiki": "expr-voice-5-f",
+              "Leo": "expr-voice-5-m"
+            }
+          }
+          EOF
+
+          test "$(stat -c%s "$MODEL_DIR/kitten_tts.onnx")" -eq 41384970
+          test "$(stat -c%s "$MODEL_DIR/voices.npz")" -eq 3278902
+
+      - name: Patch engine identity and ARM64-only packaging
+        run: |
+          set -euo pipefail
+
+          cd .deps/kittentts-android
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          build = Path("app/build.gradle.kts")
+          text = build.read_text()
+
+          old_abis = 'abiFilters += listOf("arm64-v8a", "armeabi-v7a")'
+          if old_abis not in text:
+              raise SystemExit("Expected Kitten ABI declaration not found")
+          text = text.replace(old_abis, 'abiFilters += listOf("arm64-v8a")')
+          text = text.replace('versionCode = 1', 'versionCode = 2')
+          text = text.replace('versionName = "1.0"', 'versionName = "1.0-micro-v0.8"')
+          build.write_text(text)
+
+          strings = Path("app/src/main/res/values/strings.xml")
+          s = strings.read_text()
+          if ">KittenTTS<" in s:
+              s = s.replace(">KittenTTS<", ">KittenTTS Micro<")
+          elif "KittenTTS" in s:
+              s = s.replace("KittenTTS", "KittenTTS Micro")
+          else:
+              raise SystemExit("Expected KittenTTS app name not found")
+          strings.write_text(s)
+          PY
+
+          grep -q 'abiFilters += listOf("arm64-v8a")' app/build.gradle.kts
+          ! grep -q 'armeabi-v7a' app/build.gradle.kts
+
+      - name: Build KittenTTS Micro APK
+        run: |
+          set -euo pipefail
+
+          cd .deps/kittentts-android
+          chmod +x gradlew
+
+          ./gradlew \
+            :app:compileDebugKotlin \
+            :app:assembleDebug \
+            --stacktrace
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+
+          unzip -l "$APK" | grep -q "assets/model/kitten_tts.onnx"
+          unzip -l "$APK" | grep -q "assets/model/voices.npz"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libkittentts-native.so"
+
+          if unzip -l "$APK" | grep -q "lib/armeabi-v7a/"; then
+            echo "Unexpected armeabi-v7a library in Micro APK"
+            exit 1
+          fi
+
+          if unzip -l "$APK" | grep -q "lib/x86"; then
+            echo "Unexpected x86 library in Micro APK"
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/build-artifacts"
+          cp "$APK" "$GITHUB_WORKSPACE/build-artifacts/KittenTTS-Micro-v0.8-arm64.apk"
+
+          sha256sum "$GITHUB_WORKSPACE/build-artifacts/KittenTTS-Micro-v0.8-arm64.apk"
+
+      - name: Upload Kitten Micro engine APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitten-tts-micro-v0.8-arm64
+          path: build-artifacts/KittenTTS-Micro-v0.8-arm64.apk
+          if-no-files-found: error
