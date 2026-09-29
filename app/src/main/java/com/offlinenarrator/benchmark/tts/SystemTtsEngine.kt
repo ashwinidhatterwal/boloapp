@@ -126,6 +126,10 @@ class SystemTtsEngine(
         }
     }
 
+    override fun cancel() {
+        runCatching { tts?.stop() }
+    }
+
     override fun release() {
         ready = false
         runCatching { tts?.stop() }

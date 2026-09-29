@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlinenarrator.benchmark.model.KokoroModelStore
 import com.offlinenarrator.benchmark.tts.KokoroTtsEngine
+import com.offlinenarrator.benchmark.tts.PocketTtsEngine
 import com.offlinenarrator.benchmark.tts.SpeechRequest
 import com.offlinenarrator.benchmark.tts.SynthesisResult
 import com.offlinenarrator.benchmark.tts.SystemTtsEngine
@@ -16,12 +17,15 @@ import com.offlinenarrator.benchmark.util.AudioPlayer
 import com.offlinenarrator.benchmark.util.DeviceDiagnostics
 import com.offlinenarrator.benchmark.util.DeviceSnapshot
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
 
 
@@ -65,6 +69,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
     val state: StateFlow<BenchmarkUiState> = _state.asStateFlow()
 
     private var engine: TtsEngine? = null
+    private var synthesisJob: Job? = null
 
     init {
         selectEngine("system")
@@ -104,6 +109,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         withContext(Dispatchers.Default) { engine?.release() }
         engine = when (id) {
             "kokoro" -> KokoroTtsEngine(app, modelStore)
+            "pocket" -> PocketTtsEngine(app)
             else -> SystemTtsEngine(app)
         }
         val selected = checkNotNull(engine)
@@ -230,15 +236,26 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         val active = engine ?: return
         if (!snapshot.isReady || snapshot.isSynthesizing || snapshot.text.isBlank()) return
 
-        viewModelScope.launch {
-            _state.update { it.copy(isSynthesizing = true, error = null, status = "Generating locally…", stressSummary = null) }
-            val result = active.synthesize(
+        synthesisJob?.cancel()
+        synthesisJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    isSynthesizing = true,
+                    error = null,
+                    status = "Generating locally…",
+                    stressSummary = null,
+                )
+            }
+
+            val result = synthesizeWithTimeout(
+                active,
                 SpeechRequest(
                     text = snapshot.text,
                     speed = snapshot.speed,
                     voiceId = snapshot.selectedVoiceId,
                 )
             )
+
             if (result.isSuccess) {
                 _state.update {
                     it.copy(
@@ -258,6 +275,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             }
+            synthesisJob = null
         }
     }
 
@@ -266,15 +284,28 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         val active = engine ?: return
         if (!snapshot.isReady || snapshot.isSynthesizing || snapshot.text.isBlank()) return
 
-        viewModelScope.launch {
-            _state.update { it.copy(isSynthesizing = true, error = null, status = "Running $iterations local synthesis passes…", stressSummary = null) }
+        synthesisJob?.cancel()
+        synthesisJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    isSynthesizing = true,
+                    error = null,
+                    status = "Running $iterations local synthesis passes…",
+                    stressSummary = null,
+                )
+            }
+
             val samples = mutableListOf<Pair<Long, Long>>()
             var last: SynthesisResult? = null
+
             repeat(iterations) { index ->
                 _state.update { it.copy(status = "Stress run ${index + 1} of $iterations…") }
-                val run = active.synthesize(
+
+                val run = synthesizeWithTimeout(
+                    active,
                     SpeechRequest(snapshot.text, snapshot.speed, snapshot.selectedVoiceId)
                 )
+
                 if (run.isFailure) {
                     _state.update {
                         it.copy(
@@ -284,8 +315,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                             deviceSnapshot = DeviceDiagnostics.capture(app),
                         )
                     }
+                    synthesisJob = null
                     return@launch
                 }
+
                 last = run.getOrThrow()
                 samples += last!!.generationTimeMs to last!!.audioDurationMs
             }
@@ -299,6 +332,37 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                     deviceSnapshot = DeviceDiagnostics.capture(app),
                 )
             }
+            synthesisJob = null
+        }
+    }
+
+    fun cancelSynthesis() {
+        synthesisJob?.cancel()
+        synthesisJob = null
+        engine?.cancel()
+        _state.update {
+            it.copy(
+                isSynthesizing = false,
+                status = "Synthesis cancel requested.",
+            )
+        }
+    }
+
+    private suspend fun synthesizeWithTimeout(
+        active: TtsEngine,
+        request: SpeechRequest,
+    ): Result<SynthesisResult> {
+        return try {
+            withTimeout(SYNTHESIS_TIMEOUT_MS) {
+                active.synthesize(request)
+            }
+        } catch (_: TimeoutCancellationException) {
+            active.cancel()
+            Result.failure(
+                IllegalStateException(
+                    "Synthesis timed out after ${SYNTHESIS_TIMEOUT_MS / 1000} seconds."
+                )
+            )
         }
     }
 
@@ -317,9 +381,15 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
+        synthesisJob?.cancel()
+        engine?.cancel()
         audioPlayer.release()
         engine?.release()
         engine = null
         super.onCleared()
+    }
+
+    private companion object {
+        const val SYNTHESIS_TIMEOUT_MS = 60_000L
     }
 }

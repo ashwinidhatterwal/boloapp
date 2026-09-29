@@ -76,6 +76,7 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 state = state,
                 onSystem = { viewModel.selectEngine("system") },
                 onKokoro = { viewModel.selectEngine("kokoro") },
+                onPocket = { viewModel.selectEngine("pocket") },
                 onImport = { modelPicker.launch(arrayOf("application/octet-stream", "*/*")) },
                 onOpenModelPage = {
                     context.startActivity(
@@ -86,6 +87,22 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                     )
                 },
                 onDeleteModel = viewModel::deleteKokoroModel,
+                onOpenPocketRelease = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/The-unknown-Shadowman/PocketTTS-Android-Engine/releases/tag/v0.5.2")
+                        )
+                    )
+                },
+                onOpenPocketEnglishPack = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/The-unknown-Shadowman/PocketTTS-Android-Engine/releases/download/v0.5.2/PocketTTS-english-FP32.zip")
+                        )
+                    )
+                },
             )
 
             PresetsCard(
@@ -150,6 +167,12 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 ) { Text("5× stress") }
             }
 
+            if (state.isSynthesizing) {
+                OutlinedButton(onClick = viewModel::cancelSynthesis) {
+                    Text("Cancel synthesis")
+                }
+            }
+
             if (state.result != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = viewModel::playResult, enabled = !state.isPlaying) { Text("Play") }
@@ -162,7 +185,7 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
 
             Spacer(Modifier.height(12.dp))
             Text(
-                "Phase-0 rule: no network permission is declared. Synthesis is local; the model page button merely opens your browser.",
+                "Phase-0 rule: Bolo declares no network permission. Kokoro and Pocket synthesis stay local; setup buttons only open your browser.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -176,9 +199,12 @@ private fun EngineCard(
     state: BenchmarkUiState,
     onSystem: () -> Unit,
     onKokoro: () -> Unit,
+    onPocket: () -> Unit,
     onImport: () -> Unit,
     onOpenModelPage: () -> Unit,
     onDeleteModel: () -> Unit,
+    onOpenPocketRelease: () -> Unit,
+    onOpenPocketEnglishPack: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -193,6 +219,11 @@ private fun EngineCard(
                     selected = state.selectedEngineId == "kokoro",
                     onClick = onKokoro,
                     label = { Text("Kokoro") },
+                )
+                FilterChip(
+                    selected = state.selectedEngineId == "pocket",
+                    onClick = onPocket,
+                    label = { Text("Pocket") },
                 )
             }
             Text(state.engineName, fontWeight = FontWeight.SemiBold)
@@ -235,6 +266,29 @@ private fun EngineCard(
                         Button(onClick = onImport) { Text("Import .onnx") }
                         OutlinedButton(onClick = onOpenModelPage) { Text("Model page") }
                     }
+                }
+            }
+
+            if (state.selectedEngineId == "pocket") {
+                HorizontalDivider()
+                Text(
+                    "One-time setup: install Pocket TTS v0.5.2, download its English FP32 pack, open Pocket TTS, and import that ZIP. Then return here and tap Pocket again.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onOpenPocketRelease) {
+                        Text("Pocket app")
+                    }
+                    OutlinedButton(onClick = onOpenPocketEnglishPack) {
+                        Text("English pack")
+                    }
+                }
+                state.engineInitMs?.let {
+                    Text(
+                        "Engine init: ${formatDuration(it)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

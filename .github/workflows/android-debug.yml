@@ -100,6 +100,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: boloapp-phase0-v0.7-runtime-lab
+          name: boloapp-phase0-v0.8-pocket-comparison
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
