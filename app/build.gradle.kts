@@ -11,8 +11,14 @@ android {
         applicationId = "com.offlinenarrator.benchmark"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.3.1-phase0-pocket-diag-fixed"
+
+        // Phase-0 target device profile: modern ARM64 Android only.
+        // This strips unused ONNX Runtime ABIs from the benchmark APK.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+        versionCode = 6
+        versionName = "0.1.4-phase0-kitten-arm64"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

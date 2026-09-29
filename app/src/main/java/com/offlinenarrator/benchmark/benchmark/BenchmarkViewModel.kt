@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlinenarrator.benchmark.model.KokoroModelStore
 import com.offlinenarrator.benchmark.tts.KokoroTtsEngine
+import com.offlinenarrator.benchmark.tts.KittenTtsEngine
 import com.offlinenarrator.benchmark.tts.PocketTtsEngine
 import com.offlinenarrator.benchmark.tts.SpeechRequest
 import com.offlinenarrator.benchmark.tts.SynthesisResult
@@ -110,6 +111,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         engine = when (id) {
             "kokoro" -> KokoroTtsEngine(app, modelStore)
             "pocket" -> PocketTtsEngine(app)
+            "kitten" -> KittenTtsEngine(app)
             else -> SystemTtsEngine(app)
         }
         val selected = checkNotNull(engine)

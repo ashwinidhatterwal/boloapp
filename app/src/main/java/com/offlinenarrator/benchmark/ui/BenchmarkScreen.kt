@@ -77,6 +77,7 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 onSystem = { viewModel.selectEngine("system") },
                 onKokoro = { viewModel.selectEngine("kokoro") },
                 onPocket = { viewModel.selectEngine("pocket") },
+                onKitten = { viewModel.selectEngine("kitten") },
                 onImport = { modelPicker.launch(arrayOf("application/octet-stream", "*/*")) },
                 onOpenModelPage = {
                     context.startActivity(
@@ -100,6 +101,14 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                         Intent(
                             Intent.ACTION_VIEW,
                             Uri.parse("https://github.com/The-unknown-Shadowman/PocketTTS-Android-Engine/releases/download/v0.5.2/PocketTTS-english-FP32.zip")
+                        )
+                    )
+                },
+                onOpenKittenRelease = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/gyanendra-baghel/kittentts-android/releases/tag/v1.0.0")
                         )
                     )
                 },
@@ -186,7 +195,7 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
 
             Spacer(Modifier.height(12.dp))
             Text(
-                "Phase-0 rule: Bolo declares no network permission. Kokoro and Pocket synthesis stay local; setup buttons only open your browser.",
+                "Phase-0 rule: Bolo declares no network permission. Kokoro, Pocket and Kitten synthesis stay local; setup buttons only open your browser.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -201,11 +210,13 @@ private fun EngineCard(
     onSystem: () -> Unit,
     onKokoro: () -> Unit,
     onPocket: () -> Unit,
+    onKitten: () -> Unit,
     onImport: () -> Unit,
     onOpenModelPage: () -> Unit,
     onDeleteModel: () -> Unit,
     onOpenPocketRelease: () -> Unit,
     onOpenPocketEnglishPack: () -> Unit,
+    onOpenKittenRelease: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -225,6 +236,11 @@ private fun EngineCard(
                     selected = state.selectedEngineId == "pocket",
                     onClick = onPocket,
                     label = { Text("Pocket") },
+                )
+                FilterChip(
+                    selected = state.selectedEngineId == "kitten",
+                    onClick = onKitten,
+                    label = { Text("Kitten") },
                 )
             }
             Text(state.engineName, fontWeight = FontWeight.SemiBold)
@@ -292,6 +308,29 @@ private fun EngineCard(
                     )
                 }
             }
+            if (state.selectedEngineId == "kitten") {
+                HorizontalDivider()
+                Text(
+                    "KittenTTS Nano uses a separate local Android engine. Its v1.0.0 APK already includes the Nano model and 8 English voices, so no model ZIP is required.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(onClick = onOpenKittenRelease) {
+                    Text("Install KittenTTS")
+                }
+                Text(
+                    "After installing, return here and tap Kitten again. First request may include a short warm-up.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                state.engineInitMs?.let {
+                    Text(
+                        "Engine init: ${formatDuration(it)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
         }
     }
 }
