@@ -7,8 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlinenarrator.benchmark.model.KokoroModelStore
 import com.offlinenarrator.benchmark.tts.KokoroTtsEngine
+import dev.ffmpegkit.kokoro.KokoroRuntimeProfile
 import com.offlinenarrator.benchmark.tts.KittenTtsEngine
-import com.offlinenarrator.benchmark.tts.PocketTtsEngine
 import com.offlinenarrator.benchmark.tts.SpeechRequest
 import com.offlinenarrator.benchmark.tts.SynthesisResult
 import com.offlinenarrator.benchmark.tts.SystemTtsEngine
@@ -53,17 +53,23 @@ data class BenchmarkUiState(
     val kokoroModelSha256: String? = null,
     val runtimeInfo: String? = null,
     val engineInitMs: Long? = null,
+    val kokoroRuntimeProfile: String = "cpu_baseline",
 )
 
 class BenchmarkViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application.applicationContext
     private val modelStore = KokoroModelStore(app)
     private val audioPlayer = AudioPlayer()
+    private val runtimePrefs = app.getSharedPreferences("kokoro_runtime", 0)
 
     private val _state = MutableStateFlow(
         BenchmarkUiState(
             kokoroModelPresent = modelStore.exists(),
             kokoroModelBytes = modelStore.sizeBytes(),
+            kokoroRuntimeProfile = runtimePrefs.getString(
+                "profile",
+                "cpu_baseline",
+            ) ?: "cpu_baseline",
             deviceSnapshot = DeviceDiagnostics.capture(app),
         )
     )
@@ -73,7 +79,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
     private var synthesisJob: Job? = null
 
     init {
-        selectEngine("system")
+        selectEngine(if (modelStore.exists()) "kokoro" else "system")
     }
 
     fun setText(value: String) = _state.update { it.copy(text = value) }
@@ -109,9 +115,8 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         audioPlayer.stop()
         withContext(Dispatchers.Default) { engine?.release() }
         engine = when (id) {
-            "kokoro" -> KokoroTtsEngine(app, modelStore)
-            "pocket" -> PocketTtsEngine(app)
-            "kitten" -> KittenTtsEngine(app)
+            "kokoro" -> KokoroTtsEngine(app, modelStore, kokoroProfileFromId(_state.value.kokoroRuntimeProfile))
+            "experimental" -> KittenTtsEngine(app)
             else -> SystemTtsEngine(app)
         }
         val selected = checkNotNull(engine)
@@ -139,9 +144,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         val init = selected.initialize()
         val initMs = (System.nanoTime() - initStarted) / 1_000_000L
         val runtimeInfo = if (id == "kokoro") {
-            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
-            val version = runCatching { OrtEnvironment.getEnvironment().version }.getOrNull() ?: "unknown"
-            "ONNX Runtime $version · CPU · BASIC_OPT · sequential · $threads threads"
+            val version = runCatching {
+                OrtEnvironment.getEnvironment().version
+            }.getOrNull() ?: "unknown"
+            "ONNX Runtime $version · ${kokoroProfileDescription(_state.value.kokoroRuntimeProfile)}"
         } else null
 
         if (init.isSuccess) {
@@ -233,8 +239,39 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun choosePocketDiagnostic() {
-        _state.update { it.copy(text = BenchmarkPassages.pocketDiagnostic) }
+
+    fun selectKokoroRuntimeProfile(id: String) {
+        if (id == _state.value.kokoroRuntimeProfile) return
+
+        runtimePrefs.edit().putString("profile", id).apply()
+        _state.update {
+            it.copy(
+                kokoroRuntimeProfile = id,
+                result = null,
+                stressSummary = null,
+                error = null,
+            )
+        }
+
+        if (_state.value.selectedEngineId == "kokoro") {
+            selectEngine("kokoro")
+        }
+    }
+
+    private fun kokoroProfileFromId(id: String): KokoroRuntimeProfile = when (id) {
+        "cpu_optimized" -> KokoroRuntimeProfile.CPU_OPTIMIZED
+        "xnnpack_4" -> KokoroRuntimeProfile.XNNPACK_4
+        "xnnpack_6" -> KokoroRuntimeProfile.XNNPACK_6
+        "xnnpack_8" -> KokoroRuntimeProfile.XNNPACK_8
+        else -> KokoroRuntimeProfile.CPU_BASELINE
+    }
+
+    private fun kokoroProfileDescription(id: String): String = when (id) {
+        "cpu_optimized" -> "CPU · ALL_OPT · adaptive threads"
+        "xnnpack_4" -> "XNNPACK · 4 threads · ALL_OPT"
+        "xnnpack_6" -> "XNNPACK · 6 threads · ALL_OPT"
+        "xnnpack_8" -> "XNNPACK · 8 threads · ALL_OPT"
+        else -> "CPU · BASIC_OPT · 4-thread baseline"
     }
 
     fun synthesize() {
@@ -370,7 +407,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                     buildString {
                         append("Synthesis timed out after ${SYNTHESIS_TIMEOUT_MS / 1000} seconds.")
                         if (!diagnostic.isNullOrBlank()) {
-                            append("\nPocket stage: ")
+                            append("\nEngine stage: ")
                             append(diagnostic)
                         }
                     }

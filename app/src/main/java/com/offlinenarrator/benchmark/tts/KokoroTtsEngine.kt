@@ -4,11 +4,13 @@ import android.content.Context
 import com.offlinenarrator.benchmark.model.KokoroModelStore
 import dev.ffmpegkit.kokoro.KokoroConfig
 import dev.ffmpegkit.kokoro.KokoroTTS
+import dev.ffmpegkit.kokoro.KokoroRuntimeProfile
 import java.io.File
 
 class KokoroTtsEngine(
     private val context: Context,
     private val modelStore: KokoroModelStore,
+    private val runtimeProfile: KokoroRuntimeProfile = KokoroRuntimeProfile.CPU_BASELINE,
 ) : TtsEngine {
 
     override val id: String = "kokoro"
@@ -20,7 +22,11 @@ class KokoroTtsEngine(
     override suspend fun initialize(): Result<Unit> = runCatching {
         check(modelStore.exists()) { "Import a Kokoro ONNX model first" }
         runCatching { KokoroTTS.release() }
-        KokoroTTS.initialize(context.applicationContext, modelStore.modelFile.absolutePath)
+        KokoroTTS.initialize(
+            context.applicationContext,
+            modelStore.modelFile.absolutePath,
+            runtimeProfile = runtimeProfile,
+        )
         ready = true
     }.onFailure {
         ready = false

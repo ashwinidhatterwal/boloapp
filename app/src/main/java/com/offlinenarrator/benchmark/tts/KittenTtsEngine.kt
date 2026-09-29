@@ -26,10 +26,10 @@ class KittenTtsEngine(
     private val context: Context,
 ) : TtsEngine {
 
-    override val id: String = "kitten"
-    override val displayName: String = "KittenTTS Nano (local)"
+    override val id: String = "experimental"
+    override val displayName: String = "Experimental local TTS"
     override val description: String =
-        "15M-parameter KittenTTS Nano through a local Android TTS service. Model is bundled by the Kitten engine app."
+        "External on-device neural TTS slot. Current provider is the installed KittenTTS-family engine."
 
     private var tts: TextToSpeech? = null
     private var ready = false
@@ -47,7 +47,7 @@ class KittenTtsEngine(
             .setPackage(ENGINE_PACKAGE)
         val available = context.packageManager.queryIntentServices(serviceIntent, 0).isNotEmpty()
         check(available) {
-            "KittenTTS engine is not installed. Install the Kitten Android engine first."
+            "Experimental local TTS engine is not installed."
         }
 
         val init = CompletableDeferred<Int>()
