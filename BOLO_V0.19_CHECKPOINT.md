@@ -105,3 +105,25 @@ audio can keep playing.
 8. Confirm generation resumes around the destination rather than processing
    skipped chapters.
 9. Close/reopen the book and confirm position resume.
+
+
+## v0.19.1 — Android EPUB XML parser fix
+
+Observed Android error:
+`This parser does not support specification "Unknown" version "0.0"`
+
+Root cause:
+Android's built-in `DocumentBuilderFactory` throws
+`UnsupportedOperationException` when `setXIncludeAware(false)` is called.
+
+Fix:
+- removed the XInclude-awareness setter entirely;
+- namespace parsing remains enabled;
+- external general/parameter entities are disabled when supported;
+- external DTD loading is disabled when supported;
+- a local empty `EntityResolver` prevents external network/file resolution;
+- DOCTYPE declarations are not rejected outright, preserving compatibility
+  with common EPUB 2 NCX files.
+
+No large-book indexing, page-location, chapter, player, cache or Kokoro logic
+changed.

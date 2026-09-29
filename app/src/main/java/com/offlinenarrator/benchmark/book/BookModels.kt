@@ -9,6 +9,11 @@ data class WordCheckpoint(
     val charOffset: Int,
 )
 
+data class PageAnchor(
+    val pageNumber: Int,
+    val globalWord: Long,
+)
+
 data class BookChapter(
     val index: Int,
     val title: String,
@@ -23,23 +28,54 @@ data class BookRecord(
     val title: String,
     val author: String,
     val sourceName: String,
+    val format: String = "EPUB",
     val importedAt: Long,
     val totalWords: Long,
     val chapters: List<BookChapter>,
+    val pageAnchors: List<PageAnchor> = emptyList(),
 ) {
+    val hasFixedPages: Boolean
+        get() = pageAnchors.isNotEmpty()
+
     val estimatedPages: Int
-        get() = maxOf(
-            1,
-            ceil(totalWords.toDouble() / WORDS_PER_ESTIMATED_PAGE.toDouble()).toInt(),
-        )
+        get() = if (pageAnchors.isNotEmpty()) {
+            maxOf(1, pageAnchors.maxOfOrNull { it.pageNumber } ?: pageAnchors.size)
+        } else {
+            maxOf(
+                1,
+                ceil(totalWords.toDouble() / WORDS_PER_ESTIMATED_PAGE.toDouble()).toInt(),
+            )
+        }
 
     fun pageForGlobalWord(globalWord: Long): Int {
         val safe = globalWord.coerceIn(0L, maxOf(0L, totalWords - 1L))
-        return (safe / WORDS_PER_ESTIMATED_PAGE).toInt() + 1
+        if (pageAnchors.isEmpty()) {
+            return (safe / WORDS_PER_ESTIMATED_PAGE).toInt() + 1
+        }
+
+        var low = 0
+        var high = pageAnchors.lastIndex
+        var best = 0
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            if (pageAnchors[mid].globalWord <= safe) {
+                best = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return pageAnchors[best].pageNumber
     }
 
     fun globalWordForPage(page: Int): Long {
         val safePage = page.coerceIn(1, estimatedPages)
+        if (pageAnchors.isNotEmpty()) {
+            val anchor = pageAnchors.firstOrNull { it.pageNumber >= safePage }
+                ?: pageAnchors.last()
+            return anchor.globalWord.coerceIn(0L, maxOf(0L, totalWords - 1L))
+        }
+
         return ((safePage - 1L) * WORDS_PER_ESTIMATED_PAGE)
             .coerceIn(0L, maxOf(0L, totalWords - 1L))
     }

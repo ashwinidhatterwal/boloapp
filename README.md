@@ -1,24 +1,20 @@
 # Bolo
 
-Current checkpoint: **v0.19 — One Book, Airplane Mode**
+Current checkpoint: **v0.20 Multi-format Import Hub**
 
-Bolo is now an indexed offline EPUB audiobook reader powered by Kokoro.
+Supported imports:
+- EPUB
+- text-based PDF
+- DOCX
+- TXT
+- HTML / HTM
 
-Highlights:
-- local EPUB library
-- chapter/spine indexing
-- whole-book scrubber
-- direct estimated-page jumps
-- ±50-page navigation
-- lazy table of contents
-- exact generated-audio resume
-- Media3 background playback service
-- notification/headset controls
-- rolling cached generation instead of whole-book synthesis
-- 1.0x–2.0x playback
-- curated Kokoro narrator voices
+All imports feed the same offline Kokoro reader and large-document navigation
+index. Text-based PDFs keep their real page numbers; reflowable formats use
+estimated pages with exact underlying word/section positions.
 
-GitHub artifact:
-`bolo-v0.19-one-book-airplane-mode`
+Scanned PDFs are detected and reported as requiring OCR.
 
-See `BOLO_V0.19_CHECKPOINT.md`.
+Build artifact: `bolo-v0.20-import-hub`
+
+See `BOLO_V0.20_CHECKPOINT.md`.

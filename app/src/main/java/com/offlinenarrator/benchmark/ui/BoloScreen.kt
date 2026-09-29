@@ -73,10 +73,10 @@ fun BoloScreen(viewModel: BoloViewModel) {
         uri?.let(viewModel::importKokoroModel)
     }
 
-    val epubPicker = rememberLauncherForActivityResult(
+    val documentPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        uri?.let(viewModel::importEpub)
+        uri?.let(viewModel::importDocument)
     }
 
     when {
@@ -110,8 +110,19 @@ fun BoloScreen(viewModel: BoloViewModel) {
         else -> {
             LibraryScreen(
                 state = state,
-                onImportEpub = {
-                    epubPicker.launch(arrayOf("application/epub+zip", "application/zip", "*/*"))
+                onImportDocument = {
+                    documentPicker.launch(
+                        arrayOf(
+                            "application/epub+zip",
+                            "application/pdf",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "text/plain",
+                            "text/html",
+                            "application/xhtml+xml",
+                            "application/zip",
+                            "*/*",
+                        )
+                    )
                 },
                 onOpenBook = viewModel::openBook,
                 onRemoveBook = viewModel::removeBook,
@@ -204,7 +215,7 @@ private fun ModelSetupScreen(
 @Composable
 private fun LibraryScreen(
     state: BoloUiState,
-    onImportEpub: () -> Unit,
+    onImportDocument: () -> Unit,
     onOpenBook: (String) -> Unit,
     onRemoveBook: (String) -> Unit,
     onReturnToPlayer: () -> Unit,
@@ -225,10 +236,10 @@ private fun LibraryScreen(
                 },
                 actions = {
                     TextButton(
-                        onClick = onImportEpub,
+                        onClick = onImportDocument,
                         enabled = !state.isImportingBook,
                     ) {
-                        Text(if (state.isImportingBook) "Indexing…" else "Import EPUB")
+                        Text(if (state.isImportingBook) "Indexing…" else "Import")
                     }
                 },
             )
@@ -254,9 +265,9 @@ private fun LibraryScreen(
                                 strokeWidth = 2.dp,
                             )
                             Column {
-                                Text("Indexing EPUB", fontWeight = FontWeight.Bold)
+                                Text("Indexing document", fontWeight = FontWeight.Bold)
                                 Text(
-                                    "Building chapters and fast book locations…",
+                                    "Extracting text and building fast book locations…",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -281,7 +292,7 @@ private fun LibraryScreen(
 
             if (state.books.isEmpty() && !state.isImportingBook) {
                 item {
-                    EmptyLibraryCard(onImportEpub)
+                    EmptyLibraryCard(onImportDocument)
                 }
             }
 
@@ -311,7 +322,7 @@ private fun LibraryScreen(
 
 @Composable
 private fun EmptyLibraryCard(
-    onImportEpub: () -> Unit,
+    onImportDocument: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(
@@ -324,11 +335,11 @@ private fun EmptyLibraryCard(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "Bolo indexes an EPUB by chapter and location. Even a very large novel can be opened or jumped through without loading the whole book into memory.",
+                "Import EPUB, PDF, DOCX, TXT or HTML. Bolo converts them into the same indexed offline book format, so even very large documents stay easy to navigate.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onImportEpub) {
-                Text("Choose EPUB")
+            Button(onClick = onImportDocument) {
+                Text("Choose document")
             }
         }
     }
@@ -361,6 +372,13 @@ private fun BookCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Text(
+                "${book.format} · ${book.sourceName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
 
             LinearProgressIndicator(
                 progress = { item.progressFraction },
@@ -368,7 +386,7 @@ private fun BookCard(
             )
 
             Text(
-                "~$page / ~${book.estimatedPages} pages · ${book.chapters.size} chapters",
+                "${pageNumberText(book, page)} / ${pageCountText(book)} · ${book.format} · ${book.chapters.size} sections",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -411,7 +429,7 @@ private fun MiniPlayerCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "Page ~${book.pageForGlobalWord(state.currentGlobalWord)}",
+                    pageNumberText(book, book.pageForGlobalWord(state.currentGlobalWord)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -452,7 +470,13 @@ private fun ReaderScreen(
     var showGoToPage by remember { mutableStateOf(false) }
     var scrubbing by remember { mutableStateOf(false) }
 
-    val liveProgress = if (book.totalWords <= 1L) {
+    val liveProgress = if (book.hasFixedPages) {
+        val page = book.pageForGlobalWord(state.currentGlobalWord)
+        if (book.estimatedPages <= 1) 0f else {
+            ((page - 1).toFloat() / (book.estimatedPages - 1).toFloat())
+                .coerceIn(0f, 1f)
+        }
+    } else if (book.totalWords <= 1L) {
         0f
     } else {
         (state.currentGlobalWord.toDouble() / (book.totalWords - 1L).toDouble())
@@ -511,7 +535,7 @@ private fun ReaderScreen(
             BookPlayerCard(
                 state = state,
                 book = book,
-                chapterTitle = chapter?.title ?: "Chapter",
+                chapterTitle = chapter?.title ?: "Section",
                 onToggle = onTogglePlayback,
                 onStop = onStop,
                 onVoice = onVoice,
@@ -521,7 +545,7 @@ private fun ReaderScreen(
             BookNavigationCard(
                 state = state,
                 book = book,
-                chapterTitle = chapter?.title ?: "Chapter",
+                chapterTitle = chapter?.title ?: "Section",
                 scrubPosition = scrubPosition,
                 onScrub = {
                     scrubbing = true
@@ -530,7 +554,14 @@ private fun ReaderScreen(
                 onScrubFinished = {
                     val target = scrubPosition
                     scrubbing = false
-                    onJumpFraction(target)
+                    if (book.hasFixedPages) {
+                        val targetPage = (
+                            1 + ((book.estimatedPages - 1) * target.coerceIn(0f, 1f)).roundToInt()
+                        ).coerceIn(1, book.estimatedPages)
+                        onJumpPage(targetPage)
+                    } else {
+                        onJumpFraction(target)
+                    }
                 },
                 onMinus50 = { onJumpByPages(-50) },
                 onPlus50 = { onJumpByPages(50) },
@@ -579,6 +610,7 @@ private fun ReaderScreen(
         GoToPageDialog(
             maxPage = book.estimatedPages,
             currentPage = book.pageForGlobalWord(state.currentGlobalWord),
+            estimated = !book.hasFixedPages,
             onDismiss = { showGoToPage = false },
             onGo = { page ->
                 showGoToPage = false
@@ -646,7 +678,7 @@ private fun BookPlayerCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "Page ~$page / ~${book.estimatedPages}",
+                    "${pageNumberText(book, page)} / ${pageCountText(book)}",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
@@ -767,7 +799,7 @@ private fun BookNavigationCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Page ~$previewPage",
+                    pageNumberText(book, previewPage),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold,
                 )
@@ -825,19 +857,19 @@ private fun BookNavigationCard(
                     enabled = state.currentChapterIndex > 0,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Previous chapter")
+                    Text("Previous section")
                 }
                 TextButton(
                     onClick = onNextChapter,
                     enabled = state.currentChapterIndex < book.chapters.lastIndex,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Next chapter")
+                    Text("Next section")
                 }
             }
 
             Text(
-                "EPUBs are reflowable, so Bolo uses estimated pages at about 250 words each. Chapter and word locations are exact.",
+                navigationNote(book),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -867,7 +899,7 @@ private fun ContentsSheet(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "${book.chapters.size} chapters · ~${book.estimatedPages} pages",
+                "${book.chapters.size} sections · ${pageCountText(book)} · ${book.format}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
@@ -902,7 +934,7 @@ private fun ContentsSheet(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    "Page ~${book.pageForGlobalWord(chapter.startWord)}",
+                                    pageNumberText(book, book.pageForGlobalWord(chapter.startWord)),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -927,6 +959,7 @@ private fun ContentsSheet(
 private fun GoToPageDialog(
     maxPage: Int,
     currentPage: Int,
+    estimated: Boolean,
     onDismiss: () -> Unit,
     onGo: (Int) -> Unit,
 ) {
@@ -935,7 +968,7 @@ private fun GoToPageDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Go to estimated page") },
+        title = { Text(if (estimated) "Go to estimated page" else "Go to page") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -950,7 +983,11 @@ private fun GoToPageDialog(
                     singleLine = true,
                 )
                 Text(
-                    "Bolo maps the page directly to the book index; skipped pages are not synthesized.",
+                    if (estimated) {
+                        "Bolo maps the estimated page directly to the document index; skipped text is not synthesized."
+                    } else {
+                        "This is the PDF's real page number. Skipped pages are not synthesized."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1121,6 +1158,19 @@ private fun playerStateLabel(state: BoloUiState): String = when {
     state.isPaused -> "PAUSED"
     else -> "READY TO READ"
 }
+
+private fun pageNumberText(book: BookRecord, page: Int): String =
+    if (book.hasFixedPages) "Page $page" else "Page ~$page"
+
+private fun pageCountText(book: BookRecord): String =
+    if (book.hasFixedPages) "${book.estimatedPages} pages" else "~${book.estimatedPages} pages"
+
+private fun navigationNote(book: BookRecord): String =
+    if (book.hasFixedPages) {
+        "PDF page numbers are preserved. Jumps use the extracted page index and do not process skipped pages."
+    } else {
+        "This format is reflowable, so Bolo uses estimated pages at about 250 words each. Section and word locations are exact."
+    }
 
 private fun formatTime(ms: Long): String {
     val total = (ms / 1000L).coerceAtLeast(0L)

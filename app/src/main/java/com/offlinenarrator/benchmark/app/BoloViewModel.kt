@@ -9,7 +9,7 @@ class BoloViewModel(application: Application) : AndroidViewModel(application) {
 
     val state = runtime.state
 
-    fun importEpub(uri: Uri) = runtime.importEpub(uri)
+    fun importDocument(uri: Uri) = runtime.importDocument(uri)
     fun importKokoroModel(uri: Uri) = runtime.importKokoroModel(uri)
 
     fun openBook(bookId: String) = runtime.openBook(bookId)

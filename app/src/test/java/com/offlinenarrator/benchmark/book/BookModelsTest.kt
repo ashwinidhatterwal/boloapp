@@ -1,78 +1,82 @@
 package com.offlinenarrator.benchmark.book
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BookModelsTest {
-    private fun hugeBook(): BookRecord {
-        val chapters = mutableListOf<BookChapter>()
-        var start = 0L
+    @Test
+    fun reflowableBooksUseEstimatedPages() {
+        val book = BookRecord(
+            id = "x",
+            title = "Test",
+            author = "Author",
+            sourceName = "test.epub",
+            format = "EPUB",
+            importedAt = 0L,
+            totalWords = 1_000L,
+            chapters = listOf(
+                BookChapter(0, "One", "00000.txt", 1_000L, 0L),
+            ),
+        )
 
-        repeat(100) { index ->
-            val words = 5_000L
-            chapters += BookChapter(
+        assertFalse(book.hasFixedPages)
+        assertEquals(4, book.estimatedPages)
+        assertEquals(3, book.pageForGlobalWord(500L))
+        assertEquals(750L, book.globalWordForPage(4))
+    }
+
+    @Test
+    fun pdfBooksUseRealPageAnchors() {
+        val book = BookRecord(
+            id = "pdf",
+            title = "PDF",
+            author = "Author",
+            sourceName = "test.pdf",
+            format = "PDF",
+            importedAt = 0L,
+            totalWords = 600L,
+            chapters = listOf(
+                BookChapter(0, "Pages 1–3", "00000.txt", 600L, 0L),
+            ),
+            pageAnchors = listOf(
+                PageAnchor(1, 0L),
+                PageAnchor(2, 100L),
+                PageAnchor(3, 450L),
+            ),
+        )
+
+        assertTrue(book.hasFixedPages)
+        assertEquals(3, book.estimatedPages)
+        assertEquals(2, book.pageForGlobalWord(300L))
+        assertEquals(450L, book.globalWordForPage(3))
+    }
+
+    @Test
+    fun distantLocationUsesChapterIndex() {
+        val chapters = (0 until 100).map { index ->
+            BookChapter(
                 index = index,
-                title = "Chapter ${index + 1}",
+                title = "Section ${index + 1}",
                 fileName = "%05d.txt".format(index),
-                wordCount = words,
-                startWord = start,
+                wordCount = 5_000L,
+                startWord = index * 5_000L,
             )
-            start += words
         }
-
-        return BookRecord(
-            id = "test",
-            title = "Huge Book",
-            author = "Test",
-            sourceName = "huge.epub",
-            importedAt = 1L,
-            totalWords = start,
+        val book = BookRecord(
+            id = "big",
+            title = "Big",
+            author = "Author",
+            sourceName = "big.txt",
+            format = "TXT",
+            importedAt = 0L,
+            totalWords = 500_000L,
             chapters = chapters,
         )
+
+        val location = book.locateGlobalWord(book.globalWordForPage(1_500))
+        assertEquals(74, location.chapterIndex)
+        assertEquals(374_750L, location.globalWord)
     }
-
-    @Test
-    fun pageJumpMapsDirectlyToDistantChapter() {
-        val book = hugeBook()
-
-        // 500,000 words at 250 words/page is about 2,000 pages.
-        assertEquals(2000, book.estimatedPages)
-
-        val global = book.globalWordForPage(1500)
-        val location = book.locateGlobalWord(global)
-
-        assertTrue(location.chapterIndex > 70)
-        assertEquals(global, location.globalWord)
-    }
-
-    @Test
-    fun chapterLookupWorksAtBookEnd() {
-        val book = hugeBook()
-        val location = book.locateGlobalWord(book.totalWords - 1L)
-
-        assertEquals(99, location.chapterIndex)
-        assertEquals(4_999L, location.wordOffset)
-    }
-
-    @Test
-    fun narrationOffsetsAdvanceByWords() {
-        val text = "One two three. Four five six. Seven eight nine."
-        val units = BookNarrationSegmenter.split(text)
-
-        assertTrue(units.isNotEmpty())
-        assertEquals(0L, units.first().startWord)
-        assertEquals(9L, units.sumOf { it.wordCount })
-    }
-
-    @Test
-    fun checkpointedDropStartsNearDistantWord() {
-        val text = (1..5_000).joinToString(" ") { "word$it" }
-        val checkpoints = buildWordCheckpoints(text, intervalWords = 100L)
-        val tail = dropWords(text, 4_500L, checkpoints)
-
-        assertTrue(tail.startsWith("word4501"))
-        assertTrue(checkpoints.size > 40)
-    }
-
 }

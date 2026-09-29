@@ -6,7 +6,7 @@ import com.offlinenarrator.benchmark.book.BookLocation
 import com.offlinenarrator.benchmark.book.BookNarrationSegmenter
 import com.offlinenarrator.benchmark.book.BookProgress
 import com.offlinenarrator.benchmark.book.BookRecord
-import com.offlinenarrator.benchmark.book.EpubBookStore
+import com.offlinenarrator.benchmark.book.DocumentBookStore
 import com.offlinenarrator.benchmark.book.LibraryBookItem
 import com.offlinenarrator.benchmark.model.KokoroModelStore
 import com.offlinenarrator.benchmark.playback.BackgroundAudioController
@@ -78,7 +78,7 @@ class BookReaderRuntime private constructor(
     private val app = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val prefs = app.getSharedPreferences("bolo_reader", Context.MODE_PRIVATE)
-    private val bookStore = EpubBookStore(app)
+    private val bookStore = DocumentBookStore(app)
     private val modelStore = KokoroModelStore(app, "fp32")
     private val cache = NarrationCache(app)
     private val engine = KokoroTtsEngine(
@@ -175,7 +175,7 @@ class BookReaderRuntime private constructor(
         _state.update { it.copy(books = books) }
     }
 
-    fun importEpub(uri: Uri) {
+    fun importDocument(uri: Uri) {
         if (_state.value.isImportingBook) return
 
         scope.launch {
@@ -183,11 +183,11 @@ class BookReaderRuntime private constructor(
                 it.copy(
                     isImportingBook = true,
                     error = null,
-                    status = "Indexing EPUB…",
+                    status = "Indexing document…",
                 )
             }
 
-            val result = bookStore.importEpub(uri)
+            val result = bookStore.importDocument(uri)
 
             if (result.isSuccess) {
                 refreshLibrary()
@@ -203,8 +203,8 @@ class BookReaderRuntime private constructor(
                 _state.update {
                     it.copy(
                         isImportingBook = false,
-                        error = result.exceptionOrNull()?.message ?: "EPUB import failed.",
-                        status = "EPUB import failed.",
+                        error = result.exceptionOrNull()?.message ?: "Document import failed.",
+                        status = "Document import failed.",
                     )
                 }
             }
@@ -241,7 +241,7 @@ class BookReaderRuntime private constructor(
                     isPreparingModel = false,
                     modelPresent = true,
                     engineReady = false,
-                    status = "Model ready. Import or open an EPUB.",
+                    status = "Model ready. Import or open a document.",
                 )
             }
         }
@@ -545,7 +545,11 @@ class BookReaderRuntime private constructor(
                 currentGlobalWord = location.globalWord,
                 currentChapterIndex = location.chapterIndex,
                 finished = false,
-                status = "Moved to page ~${book.pageForGlobalWord(location.globalWord)}.",
+                status = if (book.hasFixedPages) {
+                    "Moved to page ${book.pageForGlobalWord(location.globalWord)}."
+                } else {
+                    "Moved to page ~${book.pageForGlobalWord(location.globalWord)}."
+                },
             )
         }
 

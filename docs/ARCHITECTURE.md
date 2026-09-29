@@ -1,10 +1,10 @@
-# Bolo architecture — v0.19
+# Bolo architecture — v0.20
 
-## Flow
+## Import pipeline
 
-EPUB
-→ `EpubBookStore`
-→ chapter files + cumulative word index
+EPUB / PDF / DOCX / TXT / HTML
+→ `DocumentBookStore`
+→ normalized section text files + location metadata
 → `BookReaderRuntime`
 → `BookNarrationSegmenter`
 → Kokoro `TtsEngine`
@@ -12,13 +12,34 @@ EPUB
 → `BackgroundAudioController`
 → Media3 `MediaSessionService`
 
-## Why locations instead of fixed pages
+The reader never depends on the original document format after import.
 
-EPUB text reflows with font size and screen size, so a stable printed page
-number generally does not exist. Bolo indexes exact word locations and exposes
-a user-friendly estimated page at 250 words/page.
+## Location model
 
-The index means whole-book navigation is O(log chapters) for chapter lookup. Each chapter also stores a word→character checkpoint about every 500 words, so jumping deep inside one giant XHTML chapter only scans a small local tail instead of the chapter from the beginning.
+Every stored section has:
+- cumulative global word start;
+- exact word count;
+- a word→character checkpoint roughly every 500 words.
+
+This lets Bolo jump into a distant section or deep inside one unusually large
+section without walking all preceding text.
+
+Reflowable formats (EPUB, DOCX, TXT, HTML) expose a user-friendly estimated page
+scale at about 250 words/page. The underlying section/word locations are exact.
+
+PDF keeps an additional `PageAnchor` list with the original PDF page number and
+its global word start. The reader scrubber and Go to page use those real page
+anchors instead of estimated pages.
+
+## Import memory strategy
+
+- EPUB is read spine item by spine item from the ZIP package.
+- DOCX streams `word/document.xml` with Android's pull parser; it is not loaded
+  as one huge DOM.
+- TXT/HTML are normalized then automatically split into manageable sections.
+- PDF is extracted one page at a time. PdfBox-Android is opened with
+  `MemoryUsageSetting.setupTempFileOnly()` so large PDF stream buffers prefer
+  scratch storage instead of unrestricted Java heap.
 
 ## Lifetime
 
@@ -36,10 +57,11 @@ service keeps the process alive.
 `files/books/<book id>/chapters/00000.txt`
 `files/narration-cache/<sha>.wav`
 
-The imported EPUB is used only during indexing and is not duplicated afterward.
+The selected source file is used only during indexing and is not duplicated
+afterward.
 
 ## Resume
 
-The current media item carries chapter/word metadata in `MediaMetadata.extras`.
+The current media item carries section/word metadata in `MediaMetadata.extras`.
 The runtime persists the current segment start and audio millisecond position,
 so resume can reuse the same cached segment and seek within it.
