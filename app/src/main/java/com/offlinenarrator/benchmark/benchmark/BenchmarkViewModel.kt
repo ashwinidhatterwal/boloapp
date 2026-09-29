@@ -2,6 +2,7 @@ package com.offlinenarrator.benchmark.benchmark
 
 import android.app.Application
 import android.net.Uri
+import ai.onnxruntime.OrtEnvironment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlinenarrator.benchmark.model.KokoroModelStore
@@ -43,6 +44,10 @@ data class BenchmarkUiState(
     val deviceSnapshot: DeviceSnapshot? = null,
     val kokoroModelPresent: Boolean = false,
     val kokoroModelBytes: Long = 0L,
+    val kokoroModelName: String? = null,
+    val kokoroModelSha256: String? = null,
+    val runtimeInfo: String? = null,
+    val engineInitMs: Long? = null,
 )
 
 class BenchmarkViewModel(application: Application) : AndroidViewModel(application) {
@@ -90,6 +95,8 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                 result = null,
                 stressSummary = null,
                 status = "Preparing engine…",
+                runtimeInfo = null,
+                engineInitMs = null,
             )
         }
 
@@ -119,7 +126,16 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
 
+        val metadata = if (id == "kokoro") modelStore.metadata() else null
+        val initStarted = System.nanoTime()
         val init = selected.initialize()
+        val initMs = (System.nanoTime() - initStarted) / 1_000_000L
+        val runtimeInfo = if (id == "kokoro") {
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+            val version = runCatching { OrtEnvironment.getEnvironment().version }.getOrNull() ?: "unknown"
+            "ONNX Runtime $version · CPU · BASIC_OPT · sequential · $threads threads"
+        } else null
+
         if (init.isSuccess) {
             val voices = selected.voices()
             _state.update {
@@ -134,6 +150,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                     deviceSnapshot = DeviceDiagnostics.capture(app),
                     kokoroModelPresent = modelStore.exists(),
                     kokoroModelBytes = modelStore.sizeBytes(),
+                    kokoroModelName = metadata?.displayName,
+                    kokoroModelSha256 = metadata?.sha256,
+                    runtimeInfo = runtimeInfo,
+                    engineInitMs = initMs,
                 )
             }
         } else {
@@ -146,6 +166,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                     error = init.exceptionOrNull()?.message ?: "Engine initialization failed",
                     status = "Engine failed to initialize.",
                     deviceSnapshot = DeviceDiagnostics.capture(app),
+                    kokoroModelName = metadata?.displayName,
+                    kokoroModelSha256 = metadata?.sha256,
+                    runtimeInfo = runtimeInfo,
+                    engineInitMs = initMs,
                 )
             }
         }
@@ -165,10 +189,13 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 return@launch
             }
+            val metadata = modelStore.metadata()
             _state.update {
                 it.copy(
                     kokoroModelPresent = true,
                     kokoroModelBytes = modelStore.sizeBytes(),
+                    kokoroModelName = metadata?.displayName,
+                    kokoroModelSha256 = metadata?.sha256,
                     status = "Model imported.",
                 )
             }
@@ -187,6 +214,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                 it.copy(
                     kokoroModelPresent = false,
                     kokoroModelBytes = 0L,
+                    kokoroModelName = null,
+                    kokoroModelSha256 = null,
+                    runtimeInfo = if (it.selectedEngineId == "kokoro") null else it.runtimeInfo,
+                    engineInitMs = if (it.selectedEngineId == "kokoro") null else it.engineInitMs,
                     isReady = it.selectedEngineId != "kokoro" && it.isReady,
                     status = if (it.selectedEngineId == "kokoro") "Model removed. Import one to continue." else it.status,
                 )

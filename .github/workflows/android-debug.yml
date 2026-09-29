@@ -36,7 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build espeak-ng-data
 
-      - name: Build pinned Kokoro Android AAR from source
+      - name: Build pinned Kokoro Android AAR with tuned ORT
         run: |
           set -euo pipefail
           KOKORO_COMMIT="593e2353954498b667e3bf3489a61723e6ba6b59"
@@ -53,10 +53,12 @@ jobs:
 
           cd .deps/kokoro-android
           test "$(git rev-parse HEAD)" = "$KOKORO_COMMIT"
+
+          python3 "$GITHUB_WORKSPACE/scripts/patch_kokoro_runtime.py"
+
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
 
-          # Stage the official af_heart voicepack before building the AAR.
           mkdir -p library/src/main/assets/voices
           curl -L --fail --retry 3 \
             -o library/src/main/assets/voices/af_heart.bin \
@@ -81,9 +83,6 @@ jobs:
         with:
           gradle-version: "9.6.0"
 
-      # Deliberately request metadata checking, Kotlin compilation, tests and APK assembly
-      # together. --continue lets Gradle report independent failures in one run instead
-      # of hiding the next error behind the first failed task.
       - name: Verify compile, tests and APK
         run: |
           gradle \
@@ -94,8 +93,6 @@ jobs:
             --continue \
             --stacktrace
 
-      # Lint is useful during Phase 0, but should not block us from receiving a compiled
-      # benchmark APK if the app itself builds.
       - name: Android lint
         continue-on-error: true
         run: gradle :app:lintDebug --continue --stacktrace
@@ -103,6 +100,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: boloapp-phase0-debug
+          name: boloapp-phase0-v0.7-runtime-lab
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

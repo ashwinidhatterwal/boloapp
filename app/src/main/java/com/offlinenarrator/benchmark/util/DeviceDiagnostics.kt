@@ -14,9 +14,11 @@ data class DeviceSnapshot(
     val device: String,
     val androidVersion: String,
     val totalPssMb: Double,
-    val nativeHeapMb: Double,
+    val nativePssMb: Double,
+    val nativeHeapAllocatedMb: Double,
     val batteryTemperatureC: Double?,
     val thermalStatus: String,
+    val cpuCores: Int,
 )
 
 object DeviceDiagnostics {
@@ -24,7 +26,8 @@ object DeviceDiagnostics {
         val activity = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val process = activity.getProcessMemoryInfo(intArrayOf(Process.myPid())).firstOrNull()
         val pssMb = (process?.totalPss ?: 0) / 1024.0
-        val nativeMb = Debug.getNativeHeapAllocatedSize() / (1024.0 * 1024.0)
+        val nativePssMb = (process?.nativePss ?: 0) / 1024.0
+        val nativeHeapMb = Debug.getNativeHeapAllocatedSize() / (1024.0 * 1024.0)
 
         val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val tempTenths = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
@@ -48,9 +51,11 @@ object DeviceDiagnostics {
             device = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
             androidVersion = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
             totalPssMb = pssMb,
-            nativeHeapMb = nativeMb,
+            nativePssMb = nativePssMb,
+            nativeHeapAllocatedMb = nativeHeapMb,
             batteryTemperatureC = tempC,
             thermalStatus = thermal,
+            cpuCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1),
         )
     }
 }

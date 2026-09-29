@@ -201,7 +201,30 @@ private fun EngineCard(
             if (state.selectedEngineId == "kokoro") {
                 HorizontalDivider()
                 if (state.kokoroModelPresent) {
-                    Text("Model imported · ${formatBytes(state.kokoroModelBytes)}")
+                    Text(
+                        "${state.kokoroModelName ?: "Imported model"} · ${formatBytes(state.kokoroModelBytes)}"
+                    )
+                    state.kokoroModelSha256?.let { sha ->
+                        Text(
+                            "SHA-256 ${sha.take(16)}…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    state.runtimeInfo?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    state.engineInitMs?.let {
+                        Text(
+                            "Engine init: ${formatDuration(it)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = onImport) { Text("Replace model") }
                         TextButton(onClick = onDeleteModel) { Text("Remove") }
@@ -279,8 +302,10 @@ private fun StatusCard(state: BenchmarkUiState) {
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 Metric("Device", d.device)
                 Metric("OS", d.androidVersion)
-                Metric("App PSS", String.format(Locale.US, "%.1f MB", d.totalPssMb))
-                Metric("Native heap", String.format(Locale.US, "%.1f MB", d.nativeHeapMb))
+                Metric("Process PSS", String.format(Locale.US, "%.1f MB", d.totalPssMb))
+                Metric("Native PSS", String.format(Locale.US, "%.1f MB", d.nativePssMb))
+                Metric("Native heap allocated", String.format(Locale.US, "%.1f MB", d.nativeHeapAllocatedMb))
+                Metric("CPU cores", d.cpuCores.toString())
                 Metric("Battery temp", d.batteryTemperatureC?.let { String.format(Locale.US, "%.1f °C", it) } ?: "Unavailable")
                 Metric("Thermal status", d.thermalStatus)
             }
