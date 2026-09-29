@@ -104,6 +104,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: boloapp-phase0-v0.13-kokoro-runtime-profiles
+          name: boloapp-phase0-v0.14-kokoro-cpu-tuning-checkpoint
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

@@ -16,6 +16,9 @@ data class DeviceSnapshot(
     val totalPssMb: Double,
     val nativePssMb: Double,
     val nativeHeapAllocatedMb: Double,
+    val rssMb: Double,
+    val javaHeapUsedMb: Double,
+    val systemAvailableMb: Double,
     val batteryTemperatureC: Double?,
     val thermalStatus: String,
     val cpuCores: Int,
@@ -28,6 +31,25 @@ object DeviceDiagnostics {
         val pssMb = (process?.totalPss ?: 0) / 1024.0
         val nativePssMb = (process?.nativePss ?: 0) / 1024.0
         val nativeHeapMb = Debug.getNativeHeapAllocatedSize() / (1024.0 * 1024.0)
+
+        val rssMb = runCatching {
+            java.io.File("/proc/self/status")
+                .useLines { lines ->
+                    lines.firstOrNull { it.startsWith("VmRSS:") }
+                        ?.split(Regex("\\s+"))
+                        ?.getOrNull(1)
+                        ?.toLongOrNull()
+                        ?.div(1024.0)
+                }
+        }.getOrNull() ?: 0.0
+
+        val runtime = Runtime.getRuntime()
+        val javaHeapMb =
+            (runtime.totalMemory() - runtime.freeMemory()) / (1024.0 * 1024.0)
+
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activity.getMemoryInfo(memoryInfo)
+        val availableMb = memoryInfo.availMem / (1024.0 * 1024.0)
 
         val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val tempTenths = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
@@ -53,6 +75,9 @@ object DeviceDiagnostics {
             totalPssMb = pssMb,
             nativePssMb = nativePssMb,
             nativeHeapAllocatedMb = nativeHeapMb,
+            rssMb = rssMb,
+            javaHeapUsedMb = javaHeapMb,
+            systemAvailableMb = availableMb,
             batteryTemperatureC = tempC,
             thermalStatus = thermal,
             cpuCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1),

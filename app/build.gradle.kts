@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 9
-        versionName = "0.1.6-phase0-kokoro-profiles"
+        versionCode = 11
+        versionName = "0.1.7-phase0-kokoro-cpu-tuning"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

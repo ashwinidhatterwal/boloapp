@@ -482,12 +482,15 @@ private fun AdvancedCard(
             state.deviceSnapshot?.let { d ->
                 Metric("Device", d.device)
                 Metric("OS", d.androidVersion)
-                Metric("Process PSS", String.format(Locale.US, "%.1f MB", d.totalPssMb))
-                Metric("Native PSS", String.format(Locale.US, "%.1f MB", d.nativePssMb))
+                Metric("Process PSS (resident share)", String.format(Locale.US, "%.1f MB", d.totalPssMb))
+                Metric("Native PSS (resident share)", String.format(Locale.US, "%.1f MB", d.nativePssMb))
                 Metric(
-                    "Native heap",
+                    "Native allocated (not RSS)",
                     String.format(Locale.US, "%.1f MB", d.nativeHeapAllocatedMb),
                 )
+                Metric("Process RSS", String.format(Locale.US, "%.1f MB", d.rssMb))
+                Metric("Java heap used", String.format(Locale.US, "%.1f MB", d.javaHeapUsedMb))
+                Metric("System RAM available", String.format(Locale.US, "%.0f MB", d.systemAvailableMb))
                 Metric("CPU cores", d.cpuCores.toString())
                 Metric(
                     "Battery",
@@ -507,11 +510,11 @@ private fun RuntimeProfileSelector(
     onSelect: (String) -> Unit,
 ) {
     val profiles = listOf(
-        "cpu_baseline" to "CPU baseline",
-        "cpu_optimized" to "CPU optimized",
-        "xnnpack_4" to "XNN 4",
-        "xnnpack_6" to "XNN 6",
-        "xnnpack_8" to "XNN 8",
+        "cpu_baseline" to "Baseline",
+        "cpu_all_2" to "CPU 2",
+        "cpu_all_4" to "CPU 4",
+        "cpu_all_6" to "CPU 6",
+        "cpu_all_8" to "CPU 8",
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -528,7 +531,7 @@ private fun RuntimeProfileSelector(
         }
 
         Text(
-            "Change one profile at a time, then run the same Narration test. XNNPACK uses its own thread pool; unsupported operations fall back to CPU.",
+            "ALL_OPT profiles differ only by CPU thread count. Use the same Narration passage and 1.00× speed for a fair comparison.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

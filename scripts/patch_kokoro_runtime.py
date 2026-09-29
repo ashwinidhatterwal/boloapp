@@ -51,10 +51,10 @@ if object_marker not in code:
 
 profile_enum = """enum class KokoroRuntimeProfile {
     CPU_BASELINE,
-    CPU_OPTIMIZED,
-    XNNPACK_4,
-    XNNPACK_6,
-    XNNPACK_8,
+    CPU_ALL_2,
+    CPU_ALL_4,
+    CPU_ALL_6,
+    CPU_ALL_8,
 }
 
 """
@@ -105,40 +105,32 @@ new_create = """        val e = OrtEnvironment.getEnvironment()
 
             when (runtimeProfile) {
                 KokoroRuntimeProfile.CPU_BASELINE -> {
-                    // This reproduces the known-good v0.7+ baseline.
+                    // Known-good reference profile from the earlier benchmark.
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
                     setIntraOpNumThreads(availableCores.coerceAtMost(4))
                 }
 
-                KokoroRuntimeProfile.CPU_OPTIMIZED -> {
-                    // FP32-only experiment: q8f16 is no longer part of this path.
+                KokoroRuntimeProfile.CPU_ALL_2,
+                KokoroRuntimeProfile.CPU_ALL_4,
+                KokoroRuntimeProfile.CPU_ALL_6,
+                KokoroRuntimeProfile.CPU_ALL_8 -> {
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    setIntraOpNumThreads(availableCores.coerceAtMost(8))
-                    addConfigEntry("session.intra_op.allow_spinning", "0")
-                    addConfigEntry("session.inter_op.allow_spinning", "0")
-                }
-
-                KokoroRuntimeProfile.XNNPACK_4,
-                KokoroRuntimeProfile.XNNPACK_6,
-                KokoroRuntimeProfile.XNNPACK_8 -> {
-                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-
-                    // ONNX Runtime recommends keeping ORT intra-op at 1 when
-                    // XNNPACK owns a separate private thread pool.
-                    setIntraOpNumThreads(1)
-                    addConfigEntry("session.intra_op.allow_spinning", "0")
-                    addConfigEntry("session.inter_op.allow_spinning", "0")
 
                     val requestedThreads = when (runtimeProfile) {
-                        KokoroRuntimeProfile.XNNPACK_4 -> 4
-                        KokoroRuntimeProfile.XNNPACK_6 -> 6
-                        KokoroRuntimeProfile.XNNPACK_8 -> 8
+                        KokoroRuntimeProfile.CPU_ALL_2 -> 2
+                        KokoroRuntimeProfile.CPU_ALL_4 -> 4
+                        KokoroRuntimeProfile.CPU_ALL_6 -> 6
+                        KokoroRuntimeProfile.CPU_ALL_8 -> 8
                         else -> 4
                     }
-                    val xnnpackThreads = requestedThreads.coerceAtMost(availableCores)
-                    addXnnpack(
-                        mapOf("intra_op_num_threads" to xnnpackThreads.toString())
-                    )
+
+                    setIntraOpNumThreads(requestedThreads.coerceAtMost(availableCores))
+                    setInterOpNumThreads(1)
+
+                    // Keep spinning disabled for this checkpoint so thread count
+                    // is the only changing performance variable.
+                    addConfigEntry("session.intra_op.allow_spinning", "0")
+                    addConfigEntry("session.inter_op.allow_spinning", "0")
                 }
             }
         }
@@ -166,5 +158,226 @@ new_release = """        runCatching { session?.close() }; session = null
 if old_release not in code:
     raise SystemExit("Kokoro release block not found")
 code = code.replace(old_release, new_release, 1)
+
+
+# Kokoro's encoder has a finite context window. The Android wrapper previously
+# sent the entire text box as one inference call, which can fail inside BERT's
+# Expand node for long passages. Segment by the *actual Kokoro phoneme-token
+# count* before inference. Keep a margin below the upstream hard ceiling.
+style_marker = "    private const val STYLE_DIM = 256   // Kokoro style vector size\n"
+if style_marker not in code:
+    raise SystemExit("Kokoro STYLE_DIM marker not found")
+code = code.replace(
+    style_marker,
+    style_marker + "    private const val MAX_MODEL_TOKENS = 500\n",
+    1,
+)
+
+old_speak = """    /** Synthesize [text] to audio using the current voice. */
+    suspend fun speak(text: String, config: KokoroConfig = KokoroConfig()): KokoroResult =
+        withContext(Dispatchers.Default) {
+            val sess = session ?: throw KokoroException.NotInitialized()
+            val e = env ?: throw KokoroException.NotInitialized()
+
+            val phonemes = KokoroJNI.nativePhonemize(text)
+            val tokens = KokoroVocab.encode(phonemes)
+            val style = styleFor(voice.id, tokens.size)
+            val pcm = runModel(e, sess, tokens, style, config.speed)
+
+            val audio = when (config.outputFormat) {
+                AudioFormat.PCM -> floatToPcm16(pcm)
+                else -> encodeWav(floatToPcm16(pcm), config.sampleRate)   // WAV (Free)
+            }
+            KokoroResult(
+                audioData = audio,
+                durationMs = (pcm.size * 1000L) / config.sampleRate,
+                sampleRate = config.sampleRate,
+                format = if (config.outputFormat == AudioFormat.PCM) AudioFormat.PCM else AudioFormat.WAV,
+            )
+        }
+"""
+
+new_speak = """    /** Synthesize [text] to audio using the current voice.
+     *
+     * Long passages are segmented automatically before ONNX inference. Each
+     * segment stays below the model's phoneme-token context limit and the PCM
+     * pieces are joined into one normal result for the caller.
+     */
+    suspend fun speak(text: String, config: KokoroConfig = KokoroConfig()): KokoroResult =
+        withContext(Dispatchers.Default) {
+            val sess = session ?: throw KokoroException.NotInitialized()
+            val e = env ?: throw KokoroException.NotInitialized()
+            if (text.isBlank()) throw KokoroException.SynthesisFailed("text is blank")
+
+            val chunks = chunkTextForModel(text)
+            val pcmBuffer = ByteArrayOutputStream()
+            var totalSamples = 0L
+
+            for (chunk in chunks) {
+                val phonemes = KokoroJNI.nativePhonemize(chunk)
+                val tokens = KokoroVocab.encode(phonemes)
+
+                if (tokens.size > MAX_MODEL_TOKENS) {
+                    throw KokoroException.SynthesisFailed(
+                        "internal chunk exceeded Kokoro token limit: ${tokens.size}"
+                    )
+                }
+
+                val style = styleFor(voice.id, tokens.size)
+                val pcm = runModel(e, sess, tokens, style, config.speed)
+                totalSamples += pcm.size.toLong()
+                pcmBuffer.write(floatToPcm16(pcm))
+            }
+
+            val pcm16 = pcmBuffer.toByteArray()
+            val audio = when (config.outputFormat) {
+                AudioFormat.PCM -> pcm16
+                else -> encodeWav(pcm16, config.sampleRate)
+            }
+
+            KokoroResult(
+                audioData = audio,
+                durationMs = (totalSamples * 1000L) / config.sampleRate,
+                sampleRate = config.sampleRate,
+                format = if (config.outputFormat == AudioFormat.PCM) AudioFormat.PCM else AudioFormat.WAV,
+            )
+        }
+"""
+
+if old_speak not in code:
+    raise SystemExit("Kokoro speak block not found")
+code = code.replace(old_speak, new_speak, 1)
+
+internals_marker = "    // --- internals ---------------------------------------------------------\n"
+if internals_marker not in code:
+    raise SystemExit("Kokoro internals marker not found")
+
+helpers = """    /**
+     * Split arbitrary text into model-safe pieces using the same phoneme/token
+     * pipeline that will actually feed ONNX.
+     */
+    private fun chunkTextForModel(text: String): List<String> {
+        val normalized = text
+            .replace(Regex("[ \\\\t]+"), " ")
+            .trim()
+
+        if (normalized.isEmpty()) return emptyList()
+        if (tokenCount(normalized) <= MAX_MODEL_TOKENS) return listOf(normalized)
+
+        val units = Regex("(?<=[.!?])\\\\s+|[\\\\r\\\\n]+")
+            .split(normalized)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val chunks = mutableListOf<String>()
+        var current = ""
+
+        fun flushCurrent() {
+            if (current.isNotBlank()) {
+                chunks += current.trim()
+                current = ""
+            }
+        }
+
+        for (unit in units) {
+            if (tokenCount(unit) > MAX_MODEL_TOKENS) {
+                flushCurrent()
+                chunks += splitOversizedUnit(unit)
+                continue
+            }
+
+            val candidate = if (current.isBlank()) unit else "$current $unit"
+            if (tokenCount(candidate) <= MAX_MODEL_TOKENS) {
+                current = candidate
+            } else {
+                flushCurrent()
+                current = unit
+            }
+        }
+
+        flushCurrent()
+
+        if (chunks.isEmpty()) {
+            throw KokoroException.SynthesisFailed("unable to segment text")
+        }
+        return chunks
+    }
+
+    private fun tokenCount(text: String): Int {
+        if (text.isBlank()) return 0
+        val phonemes = KokoroJNI.nativePhonemize(text)
+        return KokoroVocab.encode(phonemes).size
+    }
+
+    /**
+     * A single sentence can itself exceed the context window. Find the largest
+     * safe prefix by token count, then back up to a nearby readable boundary.
+     */
+    private fun splitOversizedUnit(text: String): List<String> {
+        val out = mutableListOf<String>()
+        var remaining = text.trim()
+
+        while (remaining.isNotEmpty()) {
+            if (tokenCount(remaining) <= MAX_MODEL_TOKENS) {
+                out += remaining
+                break
+            }
+
+            var low = 1
+            var high = remaining.length
+            var best = 0
+
+            while (low <= high) {
+                val mid = (low + high) ushr 1
+                val candidate = remaining.substring(0, mid)
+
+                if (tokenCount(candidate) <= MAX_MODEL_TOKENS) {
+                    best = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+
+            if (best <= 0) {
+                throw KokoroException.SynthesisFailed(
+                    "unable to create a model-safe Kokoro chunk"
+                )
+            }
+
+            var cut = best
+            if (best < remaining.length) {
+                val prefix = remaining.substring(0, best)
+                val naturalBoundary = prefix.lastIndexOfAny(
+                    charArrayOf(' ', ',', ';', ':', '-', '—')
+                )
+                if (naturalBoundary >= best / 2) {
+                    cut = naturalBoundary + 1
+                }
+            }
+
+            val piece = remaining.substring(0, cut).trim()
+            if (piece.isEmpty()) {
+                throw KokoroException.SynthesisFailed(
+                    "Kokoro segmentation made no progress"
+                )
+            }
+
+            if (tokenCount(piece) > MAX_MODEL_TOKENS) {
+                throw KokoroException.SynthesisFailed(
+                    "Kokoro chunk remained above token limit"
+                )
+            }
+
+            out += piece
+            remaining = remaining.substring(cut).trimStart()
+        }
+
+        return out
+    }
+
+"""
+
+code = code.replace(internals_marker, internals_marker + "\n" + helpers, 1)
 
 src.write_text(code)

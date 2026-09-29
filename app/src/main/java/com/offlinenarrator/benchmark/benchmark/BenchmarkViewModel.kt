@@ -53,7 +53,7 @@ data class BenchmarkUiState(
     val kokoroModelSha256: String? = null,
     val runtimeInfo: String? = null,
     val engineInitMs: Long? = null,
-    val kokoroRuntimeProfile: String = "cpu_baseline",
+    val kokoroRuntimeProfile: String = "cpu_all_8",
 )
 
 class BenchmarkViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,10 +66,9 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         BenchmarkUiState(
             kokoroModelPresent = modelStore.exists(),
             kokoroModelBytes = modelStore.sizeBytes(),
-            kokoroRuntimeProfile = runtimePrefs.getString(
-                "profile",
-                "cpu_baseline",
-            ) ?: "cpu_baseline",
+            kokoroRuntimeProfile = migrateKokoroProfileId(
+                runtimePrefs.getString("profile", "cpu_all_8")
+            ),
             deviceSnapshot = DeviceDiagnostics.capture(app),
         )
     )
@@ -258,19 +257,33 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun migrateKokoroProfileId(id: String?): String = when (id) {
+        // v0.13's CPU optimized profile used up to 8 cores with ALL_OPT.
+        "cpu_optimized" -> "cpu_all_8"
+
+        // XNNPACK was rejected on the Vivo benchmark. Migrate those stored
+        // selections back to the proven CPU profile.
+        "xnnpack_4", "xnnpack_6", "xnnpack_8" -> "cpu_all_8"
+
+        "cpu_baseline", "cpu_all_2", "cpu_all_4", "cpu_all_6", "cpu_all_8" ->
+            id ?: "cpu_all_8"
+
+        else -> "cpu_all_8"
+    }
+
     private fun kokoroProfileFromId(id: String): KokoroRuntimeProfile = when (id) {
-        "cpu_optimized" -> KokoroRuntimeProfile.CPU_OPTIMIZED
-        "xnnpack_4" -> KokoroRuntimeProfile.XNNPACK_4
-        "xnnpack_6" -> KokoroRuntimeProfile.XNNPACK_6
-        "xnnpack_8" -> KokoroRuntimeProfile.XNNPACK_8
+        "cpu_all_2" -> KokoroRuntimeProfile.CPU_ALL_2
+        "cpu_all_4" -> KokoroRuntimeProfile.CPU_ALL_4
+        "cpu_all_6" -> KokoroRuntimeProfile.CPU_ALL_6
+        "cpu_all_8" -> KokoroRuntimeProfile.CPU_ALL_8
         else -> KokoroRuntimeProfile.CPU_BASELINE
     }
 
     private fun kokoroProfileDescription(id: String): String = when (id) {
-        "cpu_optimized" -> "CPU · ALL_OPT · adaptive threads"
-        "xnnpack_4" -> "XNNPACK · 4 threads · ALL_OPT"
-        "xnnpack_6" -> "XNNPACK · 6 threads · ALL_OPT"
-        "xnnpack_8" -> "XNNPACK · 8 threads · ALL_OPT"
+        "cpu_all_2" -> "CPU · ALL_OPT · 2 threads"
+        "cpu_all_4" -> "CPU · ALL_OPT · 4 threads"
+        "cpu_all_6" -> "CPU · ALL_OPT · 6 threads"
+        "cpu_all_8" -> "CPU · ALL_OPT · 8 threads"
         else -> "CPU · BASIC_OPT · 4-thread baseline"
     }
 
