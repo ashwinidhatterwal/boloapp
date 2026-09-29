@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 13
-        versionName = "0.2.0-phase0-supertonic-trial"
+        versionCode = 14
+        versionName = "0.2.0.1-phase0-supertonic-ci-fixed"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

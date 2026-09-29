@@ -58,3 +58,21 @@ The first Supertonic checkpoint intentionally uses the maintained Soniqo
 LiteRT bundle instead of the smaller community quantization. If voice quality
 and device performance are good, a later build can evaluate the smaller
 WI8/AFP32 bundle without changing Bolo's TtsEngine abstraction.
+
+
+## v0.16.1 CI fix
+
+The first v0.16 GitHub run failed before Gradle compilation because the runner's
+legacy `sdkmanager` could not find `platforms;android-37`.
+
+The Supertonic SDK's own CI does not manually install API 37. It installs only
+basic Android tooling and lets AGP resolve missing compile platforms/build-tools.
+
+v0.16.1 therefore:
+- stops asking legacy sdkmanager for API 37 / Build Tools 37;
+- keeps the stable API 36 / Build Tools 36 / NDK / CMake install;
+- leaves `compileSdk = 37` only in the Supertonic companion module;
+- lets AGP 9 fetch the missing compile platform when Gradle actually configures
+  that module;
+- overwrites the stale Kitten workflow as manual-only so it no longer runs on
+  every push.

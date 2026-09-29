@@ -28,13 +28,18 @@ jobs:
 
       - name: Install Android build dependencies
         run: |
+          set -euo pipefail
+
+          # Keep the legacy sdkmanager call to stable packages only.
+          # The runner's sdkmanager channel does not expose API 37, while AGP 9
+          # can download a missing compile platform/build-tools automatically.
+          # This mirrors the Supertonic SDK's own CI strategy.
           sdkmanager \
             "platforms;android-36" \
-            "platforms;android-37" \
             "build-tools;36.0.0" \
-            "build-tools;37.0.0" \
             "ndk;27.2.12479018" \
             "cmake;3.22.1"
+
           sudo apt-get update
           sudo apt-get install -y ninja-build espeak-ng-data
 
@@ -121,6 +126,6 @@ jobs:
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.16-supertonic-clean-trial
+          name: bolo-v0.16.1-supertonic-ci-fixed
           path: build-artifacts/*.apk
           if-no-files-found: error
