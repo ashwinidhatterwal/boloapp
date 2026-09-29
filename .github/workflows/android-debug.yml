@@ -106,7 +106,8 @@ jobs:
             :app:checkDebugAarMetadata \
             :app:compileDebugKotlin \
             :app:testDebugUnitTest \
-            :app:assembleDebug \            --continue \
+            :app:assembleDebug \
+            --continue \
             --stacktrace
 
       - name: Android lint

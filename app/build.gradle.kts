@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 17
-        versionName = "0.3.0-kokoro-reader-prototype"
+        versionCode = 18
+        versionName = "0.3.0.1-kokoro-reader-ci-fixed"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

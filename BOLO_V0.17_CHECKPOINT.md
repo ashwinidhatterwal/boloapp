@@ -41,3 +41,15 @@ Next checkpoint if this is stable:
 - headset controls
 - chapter-aware pre-generation
 - Narration Director V1
+
+
+## v0.17.1 CI fix
+
+GitHub run #21 failed before Kotlin compilation because the Gradle workflow
+accidentally merged `:app:assembleDebug` and `--continue` onto one physical
+shell line:
+
+`:app:assembleDebug \            --continue \`
+
+v0.17.1 restores them as separate shell continuation lines. No reader,
+Kokoro, buffering, cache, Media3, or UI code changed.
