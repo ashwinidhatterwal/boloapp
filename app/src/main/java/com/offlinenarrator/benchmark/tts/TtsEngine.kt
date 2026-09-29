@@ -39,5 +39,6 @@ interface TtsEngine {
     fun voices(): List<TtsVoice>
     suspend fun synthesize(request: SpeechRequest): Result<SynthesisResult>
     fun cancel() = Unit
+    fun diagnosticStatus(): String? = null
     fun release()
 }

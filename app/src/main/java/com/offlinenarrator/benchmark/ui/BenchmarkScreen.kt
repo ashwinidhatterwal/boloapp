@@ -110,6 +110,7 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 onDialogue = viewModel::chooseDialogue,
                 onNumbers = viewModel::chooseNumbers,
                 onLong = viewModel::chooseLongForm,
+                onPocketDiagnostic = viewModel::choosePocketDiagnostic,
             )
 
             OutlinedTextField(
@@ -272,7 +273,7 @@ private fun EngineCard(
             if (state.selectedEngineId == "pocket") {
                 HorizontalDivider()
                 Text(
-                    "One-time setup: install Pocket TTS v0.5.2, download its English FP32 pack, open Pocket TTS, and import that ZIP. Then return here and tap Pocket again.",
+                    "Pocket diagnostic setup: in Pocket TTS set Temperature 0.3, LSD steps 1, Threads 4, Pause 250 ms, Segment size 50, then Save. v0.9 records native-start and first-audio timing.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -301,6 +302,7 @@ private fun PresetsCard(
     onDialogue: () -> Unit,
     onNumbers: () -> Unit,
     onLong: () -> Unit,
+    onPocketDiagnostic: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -313,6 +315,7 @@ private fun PresetsCard(
                 OutlinedButton(onClick = onNumbers) { Text("Numbers") }
                 OutlinedButton(onClick = onLong) { Text("Long") }
             }
+            OutlinedButton(onClick = onPocketDiagnostic) { Text("Pocket short test") }
         }
     }
 }

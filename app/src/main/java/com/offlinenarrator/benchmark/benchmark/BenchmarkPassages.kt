@@ -22,4 +22,6 @@ object BenchmarkPassages {
             append("\n\n")
         }
     }.trim()
+
+    val pocketDiagnostic = "Hello. This is a short local Pocket TTS diagnostic."
 }

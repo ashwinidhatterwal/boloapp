@@ -358,9 +358,16 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
             }
         } catch (_: TimeoutCancellationException) {
             active.cancel()
+            val diagnostic = active.diagnosticStatus()
             Result.failure(
                 IllegalStateException(
-                    "Synthesis timed out after ${SYNTHESIS_TIMEOUT_MS / 1000} seconds."
+                    buildString {
+                        append("Synthesis timed out after ${SYNTHESIS_TIMEOUT_MS / 1000} seconds.")
+                        if (!diagnostic.isNullOrBlank()) {
+                            append("\nPocket stage: ")
+                            append(diagnostic)
+                        }
+                    }
                 )
             )
         }
@@ -390,6 +397,6 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private companion object {
-        const val SYNTHESIS_TIMEOUT_MS = 60_000L
+        const val SYNTHESIS_TIMEOUT_MS = 180_000L
     }
 }

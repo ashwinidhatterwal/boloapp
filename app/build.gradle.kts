@@ -11,8 +11,8 @@ android {
         applicationId = "com.offlinenarrator.benchmark"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.1.2-phase0-pocket"
+        versionCode = 4
+        versionName = "0.1.3-phase0-pocket-diag"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
