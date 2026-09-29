@@ -54,6 +54,18 @@ class BookModelsTest {
     }
 
     @Test
+    fun currentLineLookupUsesSparseWordOffsets() {
+        val lines = listOf(
+            ReaderLine(0, "One two.", 0L, 2L),
+            ReaderLine(1, "Three four five.", 2L, 3L),
+            ReaderLine(2, "Six.", 5L, 1L),
+        )
+        assertEquals(0, lineIndexForWord(lines, 0L))
+        assertEquals(1, lineIndexForWord(lines, 3L))
+        assertEquals(2, lineIndexForWord(lines, 5L))
+    }
+
+    @Test
     fun distantLocationUsesChapterIndex() {
         val chapters = (0 until 100).map { index ->
             BookChapter(

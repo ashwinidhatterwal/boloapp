@@ -28,6 +28,7 @@ class BoloViewModel(application: Application) : AndroidViewModel(application) {
     fun jumpToPage(page: Int) = runtime.jumpToPage(page)
     fun jumpByPages(deltaPages: Int) = runtime.jumpByPages(deltaPages)
     fun jumpToChapter(chapterIndex: Int) = runtime.jumpToChapter(chapterIndex)
+    fun playFromLine(lineIndex: Int) = runtime.playFromLine(lineIndex)
     fun previousChapter() = runtime.previousChapter()
     fun nextChapter() = runtime.nextChapter()
 

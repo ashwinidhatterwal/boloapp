@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -101,6 +103,7 @@ fun BoloScreen(viewModel: BoloViewModel) {
                 onJumpPage = viewModel::jumpToPage,
                 onJumpByPages = viewModel::jumpByPages,
                 onJumpChapter = viewModel::jumpToChapter,
+                onPlayLine = viewModel::playFromLine,
                 onPreviousChapter = viewModel::previousChapter,
                 onNextChapter = viewModel::nextChapter,
                 onClearCache = viewModel::clearPreparedAudio,
@@ -490,6 +493,7 @@ private fun ReaderScreen(
     onJumpPage: (Int) -> Unit,
     onJumpByPages: (Int) -> Unit,
     onJumpChapter: (Int) -> Unit,
+    onPlayLine: (Int) -> Unit,
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onClearCache: () -> Unit,
@@ -572,6 +576,15 @@ private fun ReaderScreen(
                 onStop = onStop,
                 onVoice = onVoice,
                 onSpeed = onSpeed,
+                onChooseChapter = { showContents = true },
+                onPreviousChapter = onPreviousChapter,
+                onNextChapter = onNextChapter,
+            )
+
+            ChapterTextCard(
+                state = state,
+                chapterTitle = chapter?.title ?: "Section",
+                onPlayLine = onPlayLine,
             )
 
             BookNavigationCard(
@@ -597,10 +610,7 @@ private fun ReaderScreen(
                 },
                 onMinus50 = { onJumpByPages(-50) },
                 onPlus50 = { onJumpByPages(50) },
-                onContents = { showContents = true },
                 onGoToPage = { showGoToPage = true },
-                onPreviousChapter = onPreviousChapter,
-                onNextChapter = onNextChapter,
             )
 
             state.error?.let {
@@ -661,22 +671,24 @@ private fun BookPlayerCard(
     onStop: () -> Unit,
     onVoice: (String) -> Unit,
     onSpeed: (Float) -> Unit,
+    onChooseChapter: () -> Unit,
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
 ) {
     val selectedVoice = state.voices.firstOrNull { it.id == state.selectedVoiceId }
     val page = book.pageForGlobalWord(state.currentGlobalWord)
-    val progress = if (book.totalWords <= 1L) {
-        0f
-    } else {
+    val progress = if (book.totalWords <= 1L) 0f else {
         (state.currentGlobalWord.toDouble() / (book.totalWords - 1L).toDouble())
             .toFloat()
             .coerceIn(0f, 1f)
     }
+    val lineText = state.chapterLines.getOrNull(state.currentLineIndex)?.text
 
     Card(Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(13.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 playerStateLabel(state),
@@ -685,20 +697,37 @@ private fun BookPlayerCard(
                 fontWeight = FontWeight.Bold,
             )
 
-            Text(
-                chapterTitle,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            TextButton(
+                onClick = onChooseChapter,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Chapter ${state.currentChapterIndex + 1} of ${book.chapters.size}  ▾",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        chapterTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
 
-            Text(
-                selectedVoice?.name ?: "Narrator",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
+            if (!lineText.isNullOrBlank()) {
+                Text(
+                    lineText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             LinearProgressIndicator(
                 progress = { progress },
@@ -713,6 +742,12 @@ private fun BookPlayerCard(
                     "${pageNumberText(book, page)} / ${pageCountText(book)}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (state.currentLineIndex >= 0 && state.chapterLines.isNotEmpty()) {
+                    Text(
+                        "Line ${state.currentLineIndex + 1}/${state.chapterLines.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Text(
                     "${formatTime(state.bufferedListeningMs)} ready",
                     style = MaterialTheme.typography.bodySmall,
@@ -720,20 +755,25 @@ private fun BookPlayerCard(
             }
 
             Row(
+                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(22.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                SpeedMenu(
-                    selected = state.playbackSpeed,
-                    onSelect = onSpeed,
-                )
+                OutlinedButton(
+                    onClick = onPreviousChapter,
+                    enabled = state.currentChapterIndex > 0,
+                    modifier = Modifier.size(58.dp),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text("‹", fontSize = 30.sp)
+                }
 
                 Button(
                     onClick = onToggle,
-                    enabled = state.engineReady &&
-                        state.playerReady &&
+                    enabled = state.engineReady && state.playerReady &&
                         (!state.readerStarted || state.playbackStarted),
-                    modifier = Modifier.size(82.dp),
+                    modifier = Modifier.size(88.dp),
                     shape = CircleShape,
                     contentPadding = PaddingValues(0.dp),
                 ) {
@@ -743,19 +783,36 @@ private fun BookPlayerCard(
                             state.isPlaying -> "Ⅱ"
                             else -> "▶"
                         },
-                        fontSize = 28.sp,
+                        fontSize = 30.sp,
                         fontWeight = FontWeight.Bold,
                     )
                 }
 
                 OutlinedButton(
-                    onClick = onStop,
-                    enabled = state.readerStarted,
-                    modifier = Modifier.size(52.dp),
+                    onClick = onNextChapter,
+                    enabled = state.currentChapterIndex < book.chapters.lastIndex,
+                    modifier = Modifier.size(58.dp),
                     shape = CircleShape,
                     contentPadding = PaddingValues(0.dp),
                 ) {
-                    Text("■")
+                    Text("›", fontSize = 30.sp)
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    SpeedMenu(selected = state.playbackSpeed, onSelect = onSpeed)
+                }
+                OutlinedButton(
+                    onClick = onStop,
+                    enabled = state.readerStarted,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Stop")
                 }
             }
 
@@ -769,13 +826,117 @@ private fun BookPlayerCard(
             Text(
                 state.status,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (state.thermalPaused) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                color = if (state.thermalPaused) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+        }
+    }
+}
+
+@Composable
+private fun ChapterTextCard(
+    state: BoloUiState,
+    chapterTitle: String,
+    onPlayLine: (Int) -> Unit,
+) {
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(
+        state.currentLineIndex,
+        state.chapterLinesChapterIndex,
+    ) {
+        val index = state.currentLineIndex
+        if (index in state.chapterLines.indices) {
+            listState.animateScrollToItem((index - 2).coerceAtLeast(0))
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Chapter text", fontWeight = FontWeight.Bold)
+            Text(
+                chapterTitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "Tap any line to start narration from that exact sentence.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            when {
+                state.isLoadingChapterLines -> {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                state.chapterLines.isEmpty() -> {
+                    Text(
+                        "No readable text in this section.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                else -> {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 220.dp, max = 430.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        itemsIndexed(
+                            items = state.chapterLines,
+                            key = { _, line -> line.index },
+                        ) { index, line ->
+                            val current = index == state.currentLineIndex
+                            TextButton(
+                                onClick = { onPlayLine(index) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.textButtonColors(
+                                    containerColor = if (current) {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surface
+                                    },
+                                    contentColor = if (current) {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                ),
+                                contentPadding = PaddingValues(
+                                    horizontal = 12.dp,
+                                    vertical = 8.dp,
+                                ),
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Text(
+                                        "${index + 1}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 2.dp),
+                                    )
+                                    Spacer(Modifier.size(10.dp))
+                                    Text(
+                                        line.text,
+                                        modifier = Modifier.weight(1f),
+                                        textAlign = TextAlign.Start,
+                                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -790,10 +951,7 @@ private fun BookNavigationCard(
     onScrubFinished: () -> Unit,
     onMinus50: () -> Unit,
     onPlus50: () -> Unit,
-    onContents: () -> Unit,
     onGoToPage: () -> Unit,
-    onPreviousChapter: () -> Unit,
-    onNextChapter: () -> Unit,
 ) {
     val previewPage = (
         1 +
@@ -860,44 +1018,11 @@ private fun BookNavigationCard(
                 }
             }
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            OutlinedButton(
+                onClick = onGoToPage,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Button(
-                    onClick = onContents,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Contents")
-                }
-                OutlinedButton(
-                    onClick = onGoToPage,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Go to page")
-                }
-            }
-
-            HorizontalDivider()
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TextButton(
-                    onClick = onPreviousChapter,
-                    enabled = state.currentChapterIndex > 0,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Previous section")
-                }
-                TextButton(
-                    onClick = onNextChapter,
-                    enabled = state.currentChapterIndex < book.chapters.lastIndex,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Next section")
-                }
+                Text("Go to page")
             }
 
             Text(
@@ -917,16 +1042,28 @@ private fun ContentsSheet(
     onDismiss: () -> Unit,
     onChapter: (Int) -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-    ) {
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(query, book.chapters) {
+        val q = query.trim()
+        if (q.isBlank()) {
+            book.chapters
+        } else {
+            book.chapters.filter { chapter ->
+                chapter.title.contains(q, ignoreCase = true) ||
+                    (chapter.index + 1).toString() == q
+            }
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "Contents",
+                "Chapters",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -934,7 +1071,14 @@ private fun ContentsSheet(
                 "${book.chapters.size} sections · ${pageCountText(book)} · ${book.format}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it.take(80) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Find chapter or number") },
+                singleLine = true,
+            )
 
             LazyColumn(
                 modifier = Modifier
@@ -942,26 +1086,35 @@ private fun ContentsSheet(
                     .heightIn(max = 560.dp),
                 contentPadding = PaddingValues(bottom = 28.dp),
             ) {
-                itemsIndexed(
-                    items = book.chapters,
-                    key = { _, chapter -> chapter.index },
-                ) { index, chapter ->
+                items(
+                    items = filtered,
+                    key = { chapter -> chapter.index },
+                ) { chapter ->
+                    val index = chapter.index
                     TextButton(
                         onClick = { onChapter(index) },
                         modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = if (index == currentChapter) {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                        ),
                     ) {
                         Row(
                             Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(end = 12.dp),
+                            )
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     chapter.title,
-                                    fontWeight = if (index == currentChapter) {
-                                        FontWeight.Bold
-                                    } else {
-                                        FontWeight.Normal
-                                    },
+                                    fontWeight = if (index == currentChapter) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -973,7 +1126,7 @@ private fun ContentsSheet(
                             }
                             if (index == currentChapter) {
                                 Text(
-                                    "Current",
+                                    "Playing",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                 )
@@ -981,6 +1134,16 @@ private fun ContentsSheet(
                         }
                     }
                     HorizontalDivider()
+                }
+
+                if (filtered.isEmpty()) {
+                    item {
+                        Text(
+                            "No matching chapter.",
+                            modifier = Modifier.padding(vertical = 20.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

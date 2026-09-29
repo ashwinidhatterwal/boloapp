@@ -119,6 +119,35 @@ data class BookLocation(
     val globalWord: Long,
 )
 
+data class ReaderLine(
+    val index: Int,
+    val text: String,
+    val startWord: Long,
+    val wordCount: Long,
+    val paragraphBreakAfter: Boolean = false,
+)
+
+fun lineIndexForWord(
+    lines: List<ReaderLine>,
+    localWord: Long,
+): Int {
+    if (lines.isEmpty()) return -1
+    val target = localWord.coerceAtLeast(0L)
+    var low = 0
+    var high = lines.lastIndex
+    var best = 0
+    while (low <= high) {
+        val mid = (low + high) ushr 1
+        if (lines[mid].startWord <= target) {
+            best = mid
+            low = mid + 1
+        } else {
+            high = mid - 1
+        }
+    }
+    return best
+}
+
 data class BookProgress(
     val chapterIndex: Int,
     val segmentStartWord: Long,
@@ -158,6 +187,7 @@ data class NarrationUnit(
     val role: NarrationRole = NarrationRole.NARRATOR,
     val speakerKey: String? = null,
     val deliveryCue: DeliveryCue = DeliveryCue.NEUTRAL,
+    val pauseAfterMs: Int = 180,
 )
 
 /**

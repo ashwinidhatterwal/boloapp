@@ -5,36 +5,24 @@ import java.util.Locale
 /**
  * Conservative deterministic narration director.
  *
- * V1 deliberately avoids guessing. Quoted text is marked as dialogue, but a
- * character identity is attached only when a nearby explicit attribution such
- * as "Arjun said" or "said Arjun" is found.
+ * v2 keeps sentence boundaries intact and never batches unrelated sentences
+ * into one TTS request. Dialogue is separated from narration only at quote
+ * boundaries; explicit speaker attribution is required before a character
+ * voice is assigned.
  */
 object NarrationDirector {
-    private const val TARGET_CHARS = 280
-    private const val HARD_CHARS = 420
-    private const val CONTEXT_CHARS = 140
+    private const val CONTEXT_CHARS = 180
 
     private val speechVerbs = listOf(
-        "said",
-        "asked",
-        "replied",
-        "answered",
-        "whispered",
-        "shouted",
-        "murmured",
-        "cried",
-        "called",
-        "yelled",
-        "added",
-        "continued",
-        "remarked",
-        "responded",
-        "muttered",
+        "said", "asked", "replied", "answered", "whispered", "shouted",
+        "murmured", "cried", "called", "yelled", "added", "continued",
+        "remarked", "responded", "muttered", "exclaimed", "insisted",
+        "warned", "promised", "admitted", "suggested", "told",
     )
 
     private val speechVerbAlternation = speechVerbs.joinToString("|") { Regex.escape(it) }
     private val namePattern =
-        """([A-Z][\p{L}'’\-]{1,30}(?:\s+[A-Z][\p{L}'’\-]{1,30})?)"""
+        """((?:(?:Mr|Mrs|Ms|Dr|Prof|Sir|Lady)\.\s+)?[A-Z][\p{L}'’\-]{1,30}(?:\s+[A-Z][\p{L}'’\-]{1,30}){0,2})"""
 
     private val afterVerbThenName = Regex(
         """^\s*[,;:—–-]*\s*(?i:$speechVerbAlternation)\s+$namePattern\b"""
@@ -47,8 +35,8 @@ object NarrationDirector {
     )
 
     private val pronounsAndNoise = setOf(
-        "he", "she", "they", "we", "i", "you", "it",
-        "the", "a", "an", "his", "her", "their",
+        "he", "she", "they", "we", "i", "you", "it", "the", "a", "an",
+        "his", "her", "their", "him", "them", "someone", "somebody",
     )
 
     fun plan(
@@ -62,7 +50,7 @@ object NarrationDirector {
             checkpoints = checkpoints,
         )
             .replace("\r\n", "\n")
-            .replace(Regex("[\\t ]+"), " ")
+            .replace('\r', '\n')
             .trim()
 
         if (remaining.isBlank()) return emptyList()
@@ -73,23 +61,17 @@ object NarrationDirector {
         for (span in spans) {
             val speaker = if (span.dialogue) {
                 inferSpeaker(span.beforeContext, span.afterContext)
-            } else {
-                null
-            }
+            } else null
 
-            splitForTts(span.text).forEach { chunk ->
-                if (chunk.isNotBlank()) {
-                    rawUnits += RawUnit(
-                        text = chunk,
-                        role = if (span.dialogue) {
-                            NarrationRole.DIALOGUE
-                        } else {
-                            NarrationRole.NARRATOR
-                        },
-                        speakerKey = speaker,
-                        deliveryCue = deliveryCue(chunk),
-                    )
-                }
+            for (slice in SentenceSegmenter.split(span.text)) {
+                if (slice.text.isBlank()) continue
+                rawUnits += RawUnit(
+                    text = slice.text,
+                    role = if (span.dialogue) NarrationRole.DIALOGUE else NarrationRole.NARRATOR,
+                    speakerKey = speaker,
+                    deliveryCue = deliveryCue(slice.text),
+                    pauseAfterMs = pauseAfterMs(slice.text, slice.paragraphBreakAfter),
+                )
             }
         }
 
@@ -106,9 +88,8 @@ object NarrationDirector {
                     role = raw.role,
                     speakerKey = raw.speakerKey,
                     deliveryCue = raw.deliveryCue,
-                ).also {
-                    nextWord += words
-                }
+                    pauseAfterMs = raw.pauseAfterMs,
+                ).also { nextWord += words }
             }
         }
     }
@@ -120,48 +101,48 @@ object NarrationDirector {
         while (cursor < text.length) {
             val open = findNextQuote(text, cursor)
             if (open < 0) {
-                addSpan(out, text.substring(cursor), dialogue = false, text, cursor, text.length)
+                addSpan(out, text.substring(cursor), false, text, cursor, text.length)
                 break
             }
 
             if (open > cursor) {
-                addSpan(
-                    out = out,
-                    value = text.substring(cursor, open),
-                    dialogue = false,
-                    source = text,
-                    sourceStart = cursor,
-                    sourceEnd = open,
-                )
+                addSpan(out, text.substring(cursor, open), false, text, cursor, open)
             }
 
             val close = findClosingQuote(text, open + 1, text[open])
             if (close < 0) {
-                addSpan(
-                    out = out,
-                    value = text.substring(open),
-                    dialogue = false,
-                    source = text,
-                    sourceStart = open,
-                    sourceEnd = text.length,
-                )
+                // An unmatched quote is safer as narrator text than swallowing
+                // the rest of a chapter into a fabricated dialogue voice.
+                addSpan(out, text.substring(open), false, text, open, text.length)
                 break
             }
 
-            val innerStart = open + 1
+            var sourceEnd = close + 1
+            // Some books put commas/periods outside the closing quote. Attach
+            // them to the dialogue span so punctuation never becomes a
+            // standalone "word" and location offsets remain stable.
+            while (sourceEnd < text.length && text[sourceEnd] in OUTSIDE_QUOTE_PUNCTUATION) {
+                sourceEnd += 1
+            }
+
+            val dialogue = buildString {
+                append(text.substring(open + 1, close))
+                if (sourceEnd > close + 1) append(text.substring(close + 1, sourceEnd))
+            }
+
             addSpan(
                 out = out,
-                value = text.substring(innerStart, close),
+                value = dialogue,
                 dialogue = true,
                 source = text,
                 sourceStart = open,
-                sourceEnd = close + 1,
+                sourceEnd = sourceEnd,
             )
-            cursor = close + 1
+            cursor = sourceEnd
         }
 
         if (out.isEmpty() && text.isNotBlank()) {
-            addSpan(out, text, dialogue = false, text, 0, text.length)
+            addSpan(out, text, false, text, 0, text.length)
         }
         return out
     }
@@ -179,7 +160,6 @@ object NarrationDirector {
 
         val beforeStart = (sourceStart - CONTEXT_CHARS).coerceAtLeast(0)
         val afterEnd = (sourceEnd + CONTEXT_CHARS).coerceAtMost(source.length)
-
         out += Span(
             text = cleaned,
             dialogue = dialogue,
@@ -195,11 +175,7 @@ object NarrationDirector {
         return -1
     }
 
-    private fun findClosingQuote(
-        text: String,
-        from: Int,
-        open: Char,
-    ): Int {
+    private fun findClosingQuote(text: String, from: Int, open: Char): Int {
         val expected = when (open) {
             '“' -> '”'
             '‘' -> '’'
@@ -211,17 +187,13 @@ object NarrationDirector {
         return -1
     }
 
-    private fun inferSpeaker(
-        before: String,
-        after: String,
-    ): String? {
+    private fun inferSpeaker(before: String, after: String): String? {
         val afterCandidate =
             afterVerbThenName.find(after)?.groupValues?.getOrNull(1)
                 ?: afterNameThenVerb.find(after)?.groupValues?.getOrNull(1)
         normalizeSpeaker(afterCandidate)?.let { return it }
 
-        val beforeCandidate =
-            beforeNameThenVerb.find(before)?.groupValues?.getOrNull(1)
+        val beforeCandidate = beforeNameThenVerb.find(before)?.groupValues?.getOrNull(1)
         return normalizeSpeaker(beforeCandidate)
     }
 
@@ -233,80 +205,37 @@ object NarrationDirector {
             ?: return null
 
         val lower = value.lowercase(Locale.ROOT)
-        if (lower in pronounsAndNoise) return null
-        if (value.length > 64) return null
+        if (lower in pronounsAndNoise || value.length > 64) return null
         return value
     }
 
-    private fun splitForTts(text: String): List<String> {
-        val rawChunks = mutableListOf<String>()
-        val paragraphs = text
-            .split(Regex("\\n{2,}"))
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        for (paragraph in paragraphs) {
-            val sentences = Regex("(?<=[.!?])\\s+|\\n+")
-                .split(paragraph)
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-
-            var current = ""
-
-            fun flush() {
-                if (current.isNotBlank()) {
-                    rawChunks += current.trim()
-                    current = ""
-                }
-            }
-
-            for (sentence in sentences) {
-                if (sentence.length > HARD_CHARS) {
-                    flush()
-                    rawChunks += splitOversized(sentence)
-                    continue
-                }
-
-                val candidate = if (current.isBlank()) sentence else "$current $sentence"
-                if (candidate.length <= TARGET_CHARS) {
-                    current = candidate
-                } else {
-                    flush()
-                    current = sentence
-                }
-            }
-            flush()
-        }
-
-        return rawChunks
-    }
-
-    private fun splitOversized(text: String): List<String> {
-        val out = mutableListOf<String>()
-        var remaining = text.trim()
-
-        while (remaining.length > HARD_CHARS) {
-            val prefix = remaining.take(HARD_CHARS)
-            val boundary = prefix.lastIndexOfAny(
-                charArrayOf('.', '?', '!', ';', ':', ',', ' ')
-            )
-            val cut = if (boundary >= TARGET_CHARS / 2) boundary + 1 else HARD_CHARS
-            val piece = remaining.substring(0, cut).trim()
-            if (piece.isNotEmpty()) out += piece
-            remaining = remaining.substring(cut).trimStart()
-        }
-
-        if (remaining.isNotBlank()) out += remaining
-        return out
-    }
-
     private fun deliveryCue(text: String): DeliveryCue {
-        val end = text.trimEnd().lastOrNull()
-        return when (end) {
-            '?' -> DeliveryCue.QUESTION
-            '!' -> DeliveryCue.EXCLAMATION
+        return when (lastMeaningfulPunctuation(text)) {
+            '?', '？' -> DeliveryCue.QUESTION
+            '!', '！' -> DeliveryCue.EXCLAMATION
             else -> DeliveryCue.NEUTRAL
         }
+    }
+
+    private fun pauseAfterMs(text: String, paragraphBreak: Boolean): Int {
+        val base = when (lastMeaningfulPunctuation(text)) {
+            '?', '!', '？', '！' -> 260
+            '.', '…', '।', '॥', '。' -> 220
+            ';', ':' -> 150
+            ',' -> 105
+            '—', '–' -> 125
+            else -> 155
+        }
+        return if (paragraphBreak) maxOf(base, 310) else base
+    }
+
+    private fun lastMeaningfulPunctuation(text: String): Char? {
+        for (i in text.lastIndex downTo 0) {
+            val ch = text[i]
+            if (ch.isWhitespace() || ch in CLOSING_MARKS) continue
+            return ch
+        }
+        return null
     }
 
     private data class Span(
@@ -321,5 +250,9 @@ object NarrationDirector {
         val role: NarrationRole,
         val speakerKey: String?,
         val deliveryCue: DeliveryCue,
+        val pauseAfterMs: Int,
     )
+
+    private val OUTSIDE_QUOTE_PUNCTUATION = charArrayOf(',', '.', ';', ':', '?', '!')
+    private val CLOSING_MARKS = charArrayOf('"', '”', '’', '\'', ')', ']', '}')
 }

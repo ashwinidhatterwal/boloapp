@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 23
-        versionName = "0.7.0-large-book-director-v1"
+        versionCode = 24
+        versionName = "0.8.0-reader-precision-player"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

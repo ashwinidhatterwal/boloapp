@@ -9,11 +9,15 @@ import com.offlinenarrator.benchmark.book.CharacterVoiceStore
 import com.offlinenarrator.benchmark.book.DocumentImportProgress
 import com.offlinenarrator.benchmark.book.NarrationDirector
 import com.offlinenarrator.benchmark.book.NarrationRole
+import com.offlinenarrator.benchmark.book.ReaderLine
+import com.offlinenarrator.benchmark.book.SentenceSegmenter
+import com.offlinenarrator.benchmark.book.lineIndexForWord
 import com.offlinenarrator.benchmark.book.DocumentBookStore
 import com.offlinenarrator.benchmark.book.LibraryBookItem
 import com.offlinenarrator.benchmark.model.KokoroModelStore
 import com.offlinenarrator.benchmark.playback.BackgroundAudioController
 import com.offlinenarrator.benchmark.reader.NarrationCache
+import com.offlinenarrator.benchmark.reader.WavAudioFinisher
 import com.offlinenarrator.benchmark.tts.KokoroTtsEngine
 import com.offlinenarrator.benchmark.tts.SpeechRequest
 import com.offlinenarrator.benchmark.tts.TtsVoice
@@ -35,6 +39,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -70,6 +75,10 @@ data class BoloUiState(
     val error: String? = null,
     val currentGlobalWord: Long = 0L,
     val currentChapterIndex: Int = 0,
+    val chapterLines: List<ReaderLine> = emptyList(),
+    val chapterLinesChapterIndex: Int = -1,
+    val currentLineIndex: Int = -1,
+    val isLoadingChapterLines: Boolean = false,
     val bufferedListeningMs: Long = 0L,
     val generatedSegments: Int = 0,
     val dialogueSegments: Int = 0,
@@ -119,6 +128,7 @@ class BookReaderRuntime private constructor(
     private var readerJob: Job? = null
     private var importJob: Job? = null
     private var progressJob: Job? = null
+    private var chapterLinesJob: Job? = null
     private val synthesisMutex = Mutex()
 
     private var selectedLocation: BookLocation? = null
@@ -412,6 +422,10 @@ class BookReaderRuntime private constructor(
                     activeBook = book,
                     currentGlobalWord = progress?.globalWord ?: location.globalWord,
                     currentChapterIndex = location.chapterIndex,
+                    chapterLines = emptyList(),
+                    chapterLinesChapterIndex = -1,
+                    currentLineIndex = -1,
+                    isLoadingChapterLines = true,
                     finished = false,
                     error = null,
                     status = if (it.engineReady) {
@@ -421,6 +435,8 @@ class BookReaderRuntime private constructor(
                     },
                 )
             }
+
+            requestChapterLines(book, location.chapterIndex)
 
             if (!_state.value.playerReady) {
                 ensurePlayerConnected()
@@ -464,6 +480,10 @@ class BookReaderRuntime private constructor(
                     it.copy(
                         activeBook = null,
                         page = BoloPage.LIBRARY,
+                        chapterLines = emptyList(),
+                        chapterLinesChapterIndex = -1,
+                        currentLineIndex = -1,
+                        isLoadingChapterLines = false,
                     )
                 }
             }
@@ -567,6 +587,17 @@ class BookReaderRuntime private constructor(
         jumpToGlobalWord(chapter.startWord)
     }
 
+    fun playFromLine(lineIndex: Int) {
+        val snapshot = _state.value
+        val book = snapshot.activeBook ?: return
+        if (snapshot.chapterLinesChapterIndex != snapshot.currentChapterIndex) return
+        val chapter = book.chapters.getOrNull(snapshot.currentChapterIndex) ?: return
+        val line = snapshot.chapterLines.getOrNull(lineIndex) ?: return
+        val globalWord = (chapter.startWord + line.startWord)
+            .coerceIn(0L, maxOf(0L, book.totalWords - 1L))
+        jumpToGlobalWord(globalWord, forcePlayback = true)
+    }
+
     fun previousChapter() {
         val book = _state.value.activeBook ?: return
         val target = (_state.value.currentChapterIndex - 1).coerceAtLeast(0)
@@ -582,10 +613,13 @@ class BookReaderRuntime private constructor(
         jumpToGlobalWord(chapter.startWord)
     }
 
-    private fun jumpToGlobalWord(globalWord: Long) {
+    private fun jumpToGlobalWord(
+        globalWord: Long,
+        forcePlayback: Boolean = false,
+    ) {
         val book = _state.value.activeBook ?: return
         val location = book.locateGlobalWord(globalWord)
-        val shouldRestart = _state.value.readerStarted && !_state.value.isPaused
+        val shouldRestart = forcePlayback || (_state.value.readerStarted && !_state.value.isPaused)
 
         if (_state.value.readerStarted) {
             stopNarrationInternal(savePosition = false)
@@ -609,6 +643,13 @@ class BookReaderRuntime private constructor(
             it.copy(
                 currentGlobalWord = location.globalWord,
                 currentChapterIndex = location.chapterIndex,
+                currentLineIndex = lineIndexForCurrentLocation(
+                    book = book,
+                    chapterIndex = location.chapterIndex,
+                    globalWord = location.globalWord,
+                    lines = it.chapterLines,
+                    linesChapterIndex = it.chapterLinesChapterIndex,
+                ),
                 finished = false,
                 status = if (book.hasFixedPages) {
                     "Moved to page ${book.pageForGlobalWord(location.globalWord)}."
@@ -617,6 +658,8 @@ class BookReaderRuntime private constructor(
                 },
             )
         }
+
+        requestChapterLines(book, location.chapterIndex)
 
         if (shouldRestart) {
             startNarration(location, 0L)
@@ -663,6 +706,13 @@ class BookReaderRuntime private constructor(
                 error = null,
                 currentGlobalWord = start.globalWord,
                 currentChapterIndex = start.chapterIndex,
+                currentLineIndex = lineIndexForCurrentLocation(
+                    book = book,
+                    chapterIndex = start.chapterIndex,
+                    globalWord = start.globalWord,
+                    lines = it.chapterLines,
+                    linesChapterIndex = it.chapterLinesChapterIndex,
+                ),
                 bufferedListeningMs = 0L,
                 generatedSegments = 0,
                 dialogueSegments = 0,
@@ -737,10 +787,11 @@ class BookReaderRuntime private constructor(
                             dialogueSegments += 1
                         }
 
+                        val cacheTextKey = "${unit.text}\u0000pause=${unit.pauseAfterMs}"
                         val cached = cache.get(
                             modelSha = modelSha,
                             voiceId = unitVoiceId,
-                            text = unit.text,
+                            text = cacheTextKey,
                         )
 
                         val prepared = if (cached != null) {
@@ -772,15 +823,22 @@ class BookReaderRuntime private constructor(
                             }
 
                             val result = synthesized.getOrThrow()
+                            val appendedPauseMs = withContext(Dispatchers.IO) {
+                                WavAudioFinisher.appendSilence(
+                                    file = result.audioFile,
+                                    pauseMs = unit.pauseAfterMs,
+                                )
+                            }
+                            val finishedDurationMs = result.audioDurationMs + appendedPauseMs
                             generationMs += result.generationTimeMs
-                            generatedAudioMs += result.audioDurationMs
+                            generatedAudioMs += finishedDurationMs
 
                             cache.put(
                                 modelSha = modelSha,
                                 voiceId = unitVoiceId,
-                                text = unit.text,
+                                text = cacheTextKey,
                                 source = result.audioFile,
-                                durationMs = result.audioDurationMs,
+                                durationMs = finishedDurationMs,
                             )
                         }
 
@@ -959,6 +1017,7 @@ class BookReaderRuntime private constructor(
                 ).coerceIn(0L, maxOf(0L, active.totalWords - 1L))
         }
 
+        val beforeChapter = _state.value.currentChapterIndex
         _state.update {
             it.copy(
                 playerReady = player.isConnected(),
@@ -967,10 +1026,97 @@ class BookReaderRuntime private constructor(
                 isPaused = player.isPaused(),
                 currentGlobalWord = globalWord,
                 currentChapterIndex = chapterIndex,
+                currentLineIndex = if (active != null) {
+                    lineIndexForCurrentLocation(
+                        book = active,
+                        chapterIndex = chapterIndex,
+                        globalWord = globalWord,
+                        lines = it.chapterLines,
+                        linesChapterIndex = it.chapterLinesChapterIndex,
+                    )
+                } else {
+                    -1
+                },
                 bufferedListeningMs = player.bufferedListeningMs(),
                 underruns = player.underruns,
             )
         }
+
+        if (active != null && (chapterIndex != beforeChapter || _state.value.chapterLinesChapterIndex != chapterIndex)) {
+            requestChapterLines(active, chapterIndex)
+        }
+    }
+
+    private fun requestChapterLines(
+        book: BookRecord,
+        chapterIndex: Int,
+    ) {
+        val current = _state.value
+        if (
+            current.activeBook?.id == book.id &&
+            current.chapterLinesChapterIndex == chapterIndex &&
+            (current.chapterLines.isNotEmpty() || current.isLoadingChapterLines)
+        ) {
+            return
+        }
+
+        chapterLinesJob?.cancel()
+        _state.update {
+            it.copy(
+                isLoadingChapterLines = true,
+                chapterLines = if (it.chapterLinesChapterIndex == chapterIndex) it.chapterLines else emptyList(),
+                chapterLinesChapterIndex = chapterIndex,
+                currentLineIndex = -1,
+            )
+        }
+
+        chapterLinesJob = scope.launch {
+            runCatching {
+                val text = bookStore.readChapter(book.id, chapterIndex)
+                SentenceSegmenter.readerLines(text)
+            }.onSuccess { lines ->
+                val snapshot = _state.value
+                if (snapshot.activeBook?.id == book.id && snapshot.currentChapterIndex == chapterIndex) {
+                    val lineIndex = lineIndexForCurrentLocation(
+                        book = book,
+                        chapterIndex = chapterIndex,
+                        globalWord = snapshot.currentGlobalWord,
+                        lines = lines,
+                        linesChapterIndex = chapterIndex,
+                    )
+                    _state.update {
+                        it.copy(
+                            chapterLines = lines,
+                            chapterLinesChapterIndex = chapterIndex,
+                            currentLineIndex = lineIndex,
+                            isLoadingChapterLines = false,
+                        )
+                    }
+                }
+            }.onFailure { failure ->
+                if (failure !is kotlinx.coroutines.CancellationException) {
+                    _state.update {
+                        it.copy(
+                            isLoadingChapterLines = false,
+                            error = "Could not load chapter text: ${failure.message}",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun lineIndexForCurrentLocation(
+        book: BookRecord,
+        chapterIndex: Int,
+        globalWord: Long,
+        lines: List<ReaderLine>,
+        linesChapterIndex: Int,
+    ): Int {
+        if (linesChapterIndex != chapterIndex || lines.isEmpty()) return -1
+        val chapter = book.chapters.getOrNull(chapterIndex) ?: return -1
+        val localWord = (globalWord - chapter.startWord).coerceAtLeast(0L)
+        return lineIndexForWord(lines, localWord)
     }
 
     private fun saveCurrentPosition() {
