@@ -17,7 +17,7 @@ class NarrationPrecisionTest {
 
     @Test
     fun punctuationCreatesMeaningfulPausePolicy() {
-        val text = "Wait,\nReally?\nEnough!\nDone."
+        val text = "Wait.\nReally?\nEnough!\nDone."
         val units = NarrationDirector.plan(text)
         assertEquals(4, units.size)
         assertTrue(units[1].pauseAfterMs >= 250)

@@ -59,3 +59,17 @@ The silence is appended directly to the generated PCM WAV, so Media3 cannot run 
 
 GitHub artifact: `bolo-v0.22-reader-precision-player`
 APK: `Bolo-v0.22-Reader-Precision-Player.apk`
+
+
+## v0.22.1 — CI punctuation-test correction
+
+GitHub Actions run #27 reached the unit-test stage and failed only
+`NarrationPrecisionTest.punctuationCreatesMeaningfulPausePolicy`.
+
+The test incorrectly used `Wait,\nReally?` while expecting four sentence units.
+A comma does not end a sentence, and the production segmenter intentionally
+folds comma + soft newline into the same sentence to avoid false pauses in
+wrapped PDF/EPUB text.
+
+The fixture is corrected to `Wait.\nReally?`, preserving the production
+sentence-boundary logic unchanged.
