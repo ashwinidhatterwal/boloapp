@@ -140,14 +140,41 @@ data class LibraryBookItem(
         }
 }
 
+enum class NarrationRole {
+    NARRATOR,
+    DIALOGUE,
+}
+
+enum class DeliveryCue {
+    NEUTRAL,
+    QUESTION,
+    EXCLAMATION,
+}
+
 data class NarrationUnit(
     val text: String,
     val startWord: Long,
     val wordCount: Long,
+    val role: NarrationRole = NarrationRole.NARRATOR,
+    val speakerKey: String? = null,
+    val deliveryCue: DeliveryCue = DeliveryCue.NEUTRAL,
 )
 
-fun countWords(text: String): Long =
-    Regex("""\S+""").findAll(text).count().toLong()
+/**
+ * Fast allocation-light word counter used by import and navigation indexing.
+ * A word is any contiguous run of non-whitespace characters, matching Bolo's
+ * existing location semantics without allocating a Regex MatchResult per word.
+ */
+fun countWords(text: String): Long {
+    var count = 0L
+    var inWord = false
+    for (ch in text) {
+        val nonWhitespace = !ch.isWhitespace()
+        if (nonWhitespace && !inWord) count += 1L
+        inWord = nonWhitespace
+    }
+    return count
+}
 
 fun buildWordCheckpoints(
     text: String,
@@ -158,22 +185,27 @@ fun buildWordCheckpoints(
     val checkpoints = mutableListOf(
         WordCheckpoint(
             wordOffset = 0L,
-            charOffset = 0,
+            charOffset = firstWordChar(text).coerceAtLeast(0),
         )
     )
 
     var wordIndex = 0L
-    for (match in Regex("""\S+""").findAll(text)) {
-        if (
-            wordIndex > 0L &&
-            wordIndex % intervalWords == 0L
-        ) {
-            checkpoints += WordCheckpoint(
-                wordOffset = wordIndex,
-                charOffset = match.range.first,
-            )
+    var inWord = false
+    text.forEachIndexed { index, ch ->
+        val nonWhitespace = !ch.isWhitespace()
+        if (nonWhitespace && !inWord) {
+            if (
+                wordIndex > 0L &&
+                wordIndex % intervalWords == 0L
+            ) {
+                checkpoints += WordCheckpoint(
+                    wordOffset = wordIndex,
+                    charOffset = index,
+                )
+            }
+            wordIndex += 1L
         }
-        wordIndex += 1L
+        inWord = nonWhitespace
     }
 
     return checkpoints
@@ -195,16 +227,25 @@ fun dropWords(
         ?.coerceIn(0, text.length)
         ?: 0
     var seen = checkpoint?.wordOffset ?: 0L
+    var inWord = false
 
-    val tail = text.substring(initialChar)
-    val matcher = Regex("""\S+""")
-
-    for (match in matcher.findAll(tail)) {
-        if (seen >= wordsToDrop) {
-            return tail.substring(match.range.first).trimStart()
+    for (index in initialChar until text.length) {
+        val nonWhitespace = !text[index].isWhitespace()
+        if (nonWhitespace && !inWord) {
+            if (seen >= wordsToDrop) {
+                return text.substring(index).trimStart()
+            }
+            seen += 1L
         }
-        seen += 1L
+        inWord = nonWhitespace
     }
 
     return ""
+}
+
+private fun firstWordChar(text: String): Int {
+    for (i in text.indices) {
+        if (!text[i].isWhitespace()) return i
+    }
+    return 0
 }

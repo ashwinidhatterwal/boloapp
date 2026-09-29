@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 22
-        versionName = "0.6.0-import-hub"
+        versionCode = 23
+        versionName = "0.7.0-large-book-director-v1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

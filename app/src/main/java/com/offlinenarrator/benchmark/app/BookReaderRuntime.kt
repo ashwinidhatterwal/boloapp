@@ -3,9 +3,12 @@ package com.offlinenarrator.benchmark.app
 import android.content.Context
 import android.net.Uri
 import com.offlinenarrator.benchmark.book.BookLocation
-import com.offlinenarrator.benchmark.book.BookNarrationSegmenter
 import com.offlinenarrator.benchmark.book.BookProgress
 import com.offlinenarrator.benchmark.book.BookRecord
+import com.offlinenarrator.benchmark.book.CharacterVoiceStore
+import com.offlinenarrator.benchmark.book.DocumentImportProgress
+import com.offlinenarrator.benchmark.book.NarrationDirector
+import com.offlinenarrator.benchmark.book.NarrationRole
 import com.offlinenarrator.benchmark.book.DocumentBookStore
 import com.offlinenarrator.benchmark.book.LibraryBookItem
 import com.offlinenarrator.benchmark.model.KokoroModelStore
@@ -45,6 +48,11 @@ data class BoloUiState(
     val books: List<LibraryBookItem> = emptyList(),
     val activeBook: BookRecord? = null,
     val isImportingBook: Boolean = false,
+    val importPhase: String? = null,
+    val importDetail: String? = null,
+    val importCurrent: Int = 0,
+    val importTotal: Int? = null,
+    val importFraction: Float? = null,
     val isPreparingModel: Boolean = false,
     val modelPresent: Boolean = false,
     val engineReady: Boolean = false,
@@ -64,6 +72,8 @@ data class BoloUiState(
     val currentChapterIndex: Int = 0,
     val bufferedListeningMs: Long = 0L,
     val generatedSegments: Int = 0,
+    val dialogueSegments: Int = 0,
+    val charactersVoiced: Int = 0,
     val cacheHits: Int = 0,
     val meanGenerationRtf: Double? = null,
     val underruns: Int = 0,
@@ -79,6 +89,7 @@ class BookReaderRuntime private constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val prefs = app.getSharedPreferences("bolo_reader", Context.MODE_PRIVATE)
     private val bookStore = DocumentBookStore(app)
+    private val characterVoiceStore = CharacterVoiceStore(app)
     private val modelStore = KokoroModelStore(app, "fp32")
     private val cache = NarrationCache(app)
     private val engine = KokoroTtsEngine(
@@ -106,6 +117,7 @@ class BookReaderRuntime private constructor(
     }
 
     private var readerJob: Job? = null
+    private var importJob: Job? = null
     private var progressJob: Job? = null
     private val synthesisMutex = Mutex()
 
@@ -178,36 +190,88 @@ class BookReaderRuntime private constructor(
     fun importDocument(uri: Uri) {
         if (_state.value.isImportingBook) return
 
-        scope.launch {
+        importJob?.cancel()
+        importJob = scope.launch {
             _state.update {
                 it.copy(
                     isImportingBook = true,
+                    importPhase = "Starting import",
+                    importDetail = "",
+                    importCurrent = 0,
+                    importTotal = null,
+                    importFraction = 0f,
                     error = null,
                     status = "Indexing document…",
                 )
             }
 
-            val result = bookStore.importDocument(uri)
+            try {
+                val result = bookStore.importDocument(uri) { progress ->
+                    applyImportProgress(progress)
+                }
 
-            if (result.isSuccess) {
-                refreshLibrary()
-                val book = result.getOrThrow()
+                if (result.isSuccess) {
+                    refreshLibrary()
+                    val book = result.getOrThrow()
+                    _state.update {
+                        it.copy(
+                            isImportingBook = false,
+                            importPhase = null,
+                            importDetail = null,
+                            importCurrent = 0,
+                            importTotal = null,
+                            importFraction = null,
+                            status = "Imported ${book.title}.",
+                        )
+                    }
+                    openBook(book.id)
+                } else {
+                    _state.update {
+                        it.copy(
+                            isImportingBook = false,
+                            importPhase = null,
+                            importDetail = null,
+                            importCurrent = 0,
+                            importTotal = null,
+                            importFraction = null,
+                            error = result.exceptionOrNull()?.message ?: "Document import failed.",
+                            status = "Document import failed.",
+                        )
+                    }
+                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
                 _state.update {
                     it.copy(
                         isImportingBook = false,
-                        status = "Imported ${book.title}.",
+                        importPhase = null,
+                        importDetail = null,
+                        importCurrent = 0,
+                        importTotal = null,
+                        importFraction = null,
+                        status = "Import cancelled.",
                     )
                 }
-                openBook(book.id)
-            } else {
-                _state.update {
-                    it.copy(
-                        isImportingBook = false,
-                        error = result.exceptionOrNull()?.message ?: "Document import failed.",
-                        status = "Document import failed.",
-                    )
-                }
+            } finally {
+                importJob = null
             }
+        }
+    }
+
+    fun cancelImport() {
+        importJob?.cancel()
+        importJob = null
+    }
+
+    private fun applyImportProgress(progress: DocumentImportProgress) {
+        _state.update {
+            it.copy(
+                importPhase = progress.phase,
+                importDetail = progress.detail,
+                importCurrent = progress.current,
+                importTotal = progress.total,
+                importFraction = progress.fraction,
+                status = progress.phase,
+            )
         }
     }
 
@@ -404,6 +468,7 @@ class BookReaderRuntime private constructor(
                 }
             }
             bookStore.deleteBook(bookId)
+            characterVoiceStore.clearBook(bookId)
             refreshLibrary()
         }
     }
@@ -600,6 +665,8 @@ class BookReaderRuntime private constructor(
                 currentChapterIndex = start.chapterIndex,
                 bufferedListeningMs = 0L,
                 generatedSegments = 0,
+                dialogueSegments = 0,
+                charactersVoiced = 0,
                 cacheHits = 0,
                 meanGenerationRtf = null,
                 underruns = 0,
@@ -615,6 +682,8 @@ class BookReaderRuntime private constructor(
             var generatedAudioMs = 0L
             var generationMs = 0L
             var generatedSegments = 0
+            var dialogueSegments = 0
+            val characterNames = linkedSetOf<String>()
             var firstSeekPending = initialSeekMs.coerceAtLeast(0L)
 
             try {
@@ -629,7 +698,7 @@ class BookReaderRuntime private constructor(
                         0L
                     }
 
-                    val units = BookNarrationSegmenter.split(
+                    val units = NarrationDirector.plan(
                         chapterText = chapterText,
                         startWord = chapterStartWord,
                         checkpoints = chapter.checkpoints,
@@ -649,9 +718,28 @@ class BookReaderRuntime private constructor(
 
                         awaitThermalHeadroom()
 
+                        val unitVoiceId = if (
+                            unit.role == NarrationRole.DIALOGUE &&
+                            unit.speakerKey != null
+                        ) {
+                            characterNames += unit.speakerKey
+                            characterVoiceStore.voiceFor(
+                                bookId = book.id,
+                                speakerKey = unit.speakerKey,
+                                narratorVoiceId = voiceId,
+                                availableVoices = _state.value.voices,
+                            )
+                        } else {
+                            voiceId
+                        }
+
+                        if (unit.role == NarrationRole.DIALOGUE) {
+                            dialogueSegments += 1
+                        }
+
                         val cached = cache.get(
                             modelSha = modelSha,
-                            voiceId = voiceId,
+                            voiceId = unitVoiceId,
                             text = unit.text,
                         )
 
@@ -667,7 +755,7 @@ class BookReaderRuntime private constructor(
                                             SpeechRequest(
                                                 text = unit.text,
                                                 speed = 1.0f,
-                                                voiceId = voiceId,
+                                                voiceId = unitVoiceId,
                                             )
                                         )
                                     }
@@ -689,7 +777,7 @@ class BookReaderRuntime private constructor(
 
                             cache.put(
                                 modelSha = modelSha,
-                                voiceId = voiceId,
+                                voiceId = unitVoiceId,
                                 text = unit.text,
                                 source = result.audioFile,
                                 durationMs = result.audioDurationMs,
@@ -719,6 +807,8 @@ class BookReaderRuntime private constructor(
                         _state.update {
                             it.copy(
                                 generatedSegments = generatedSegments,
+                                dialogueSegments = dialogueSegments,
+                                charactersVoiced = characterNames.size,
                                 cacheHits = cacheHits,
                                 meanGenerationRtf = meanRtf,
                                 status = if (player.started) {

@@ -1,20 +1,19 @@
 # Bolo
 
-Current checkpoint: **v0.20 Multi-format Import Hub**
+Current checkpoint: **v0.21 Large-Book Import + Narration Director V1**
 
-Supported imports:
-- EPUB
-- text-based PDF
-- DOCX
-- TXT
-- HTML / HTM
+Highlights:
+- EPUB / PDF / DOCX / TXT / HTML import
+- optimized progressive import for multi-million-word EPUBs
+- cancellable import with real progress
+- sparse whole-book navigation for huge documents
+- Kokoro offline narration
+- Narration Director V1 with conservative dialogue/speaker detection
+- persistent per-book character voices
+- background Media3 playback
+- adaptive playback reserve and reusable local narration cache
 
-All imports feed the same offline Kokoro reader and large-document navigation
-index. Text-based PDFs keep their real page numbers; reflowable formats use
-estimated pages with exact underlying word/section positions.
+GitHub artifact:
+`bolo-v0.21-large-book-director`
 
-Scanned PDFs are detected and reported as requiring OCR.
-
-Build artifact: `bolo-v0.20-import-hub`
-
-See `BOLO_V0.20_CHECKPOINT.md`.
+See `BOLO_V0.21_CHECKPOINT.md`.

@@ -6,7 +6,7 @@ EPUB / PDF / DOCX / TXT / HTML
 → `DocumentBookStore`
 → normalized section text files + location metadata
 → `BookReaderRuntime`
-→ `BookNarrationSegmenter`
+→ `NarrationDirector`
 → Kokoro `TtsEngine`
 → `NarrationCache`
 → `BackgroundAudioController`

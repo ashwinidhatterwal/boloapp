@@ -124,6 +124,7 @@ fun BoloScreen(viewModel: BoloViewModel) {
                         )
                     )
                 },
+                onCancelImport = viewModel::cancelImport,
                 onOpenBook = viewModel::openBook,
                 onRemoveBook = viewModel::removeBook,
                 onReturnToPlayer = viewModel::returnToPlayer,
@@ -216,6 +217,7 @@ private fun ModelSetupScreen(
 private fun LibraryScreen(
     state: BoloUiState,
     onImportDocument: () -> Unit,
+    onCancelImport: () -> Unit,
     onOpenBook: (String) -> Unit,
     onRemoveBook: (String) -> Unit,
     onReturnToPlayer: () -> Unit,
@@ -255,22 +257,52 @@ private fun LibraryScreen(
             if (state.isImportingBook) {
                 item {
                     Card(Modifier.fillMaxWidth()) {
-                        Row(
+                        Column(
                             Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                strokeWidth = 2.dp,
+                            Text(
+                                state.importPhase ?: "Indexing document",
+                                fontWeight = FontWeight.Bold,
                             )
-                            Column {
-                                Text("Indexing document", fontWeight = FontWeight.Bold)
+
+                            state.importDetail
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { detail ->
+                                    Text(
+                                        detail,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+
+                            val fraction = state.importFraction
+                            if (fraction != null) {
+                                LinearProgressIndicator(
+                                    progress = { fraction.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                                 Text(
-                                    "Extracting text and building fast book locations…",
+                                    "${(fraction.coerceIn(0f, 1f) * 100).roundToInt()}%",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                            } else {
+                                LinearProgressIndicator(
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+
+                            if (state.importTotal != null && state.importTotal > 0) {
+                                Text(
+                                    "${state.importCurrent} / ${state.importTotal}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+
+                            TextButton(onClick = onCancelImport) {
+                                Text("Cancel import")
                             }
                         }
                     }
@@ -1092,6 +1124,8 @@ private fun ReaderDetailsCard(
         ) {
             Text("Reader details", fontWeight = FontWeight.Bold)
             Metric("Generated this session", state.generatedSegments.toString())
+            Metric("Dialogue segments", state.dialogueSegments.toString())
+            Metric("Characters voiced", state.charactersVoiced.toString())
             Metric("Cached segments reused", state.cacheHits.toString())
             state.meanGenerationRtf?.let {
                 Metric(
@@ -1111,6 +1145,12 @@ private fun ReaderDetailsCard(
                 )
                 Metric("Thermal", device.thermalStatus)
             }
+
+            Text(
+                "Narration Director V1 separates quoted dialogue and only assigns a character voice when an explicit nearby speaker attribution is detected.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             Text(
                 "Playback lives in Android's MediaSessionService, so lock-screen, notification and headset play/pause controls can keep working while the screen is off.",

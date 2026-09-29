@@ -9,7 +9,10 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,6 +36,11 @@ private data class ManifestItem(
     val properties: String,
 )
 
+private data class XhtmlExtraction(
+    val text: String,
+    val heading: String?,
+)
+
 private enum class ImportFormat(val label: String) {
     EPUB("EPUB"),
     PDF("PDF"),
@@ -40,6 +48,14 @@ private enum class ImportFormat(val label: String) {
     TXT("TXT"),
     HTML("HTML"),
 }
+
+data class DocumentImportProgress(
+    val phase: String,
+    val detail: String = "",
+    val current: Int = 0,
+    val total: Int? = null,
+    val fraction: Float? = null,
+)
 
 class DocumentBookStore(
     private val context: Context,
@@ -60,29 +76,66 @@ class DocumentBookStore(
             ?: emptyList()
     }
 
-    suspend fun importDocument(uri: Uri): Result<BookRecord> = withContext(Dispatchers.IO) {
-        runCatching {
-            val sourceName = queryDisplayName(uri) ?: "Imported document"
-            val mimeType = context.contentResolver.getType(uri).orEmpty()
-            val temp = File(context.cacheDir, "bolo-import-${System.nanoTime()}.bin")
-            temp.delete()
+    suspend fun importDocument(
+        uri: Uri,
+        onProgress: (DocumentImportProgress) -> Unit = {},
+    ): Result<BookRecord> = withContext(Dispatchers.IO) {
+        val sourceName = queryDisplayName(uri) ?: "Imported document"
+        val mimeType = context.contentResolver.getType(uri).orEmpty()
+        val sourceSize = querySize(uri)
+        val temp = File(context.cacheDir, "bolo-import-${System.nanoTime()}.bin")
+        temp.delete()
+
+        var staging: File? = null
+
+        try {
+            currentCoroutineContext().ensureActive()
+            onProgress(
+                DocumentImportProgress(
+                    phase = "Copying document",
+                    detail = sourceName,
+                    fraction = 0f,
+                )
+            )
 
             val digest = MessageDigest.getInstance("SHA-256")
+            var copied = 0L
+            var nextProgressAt = 0L
+
             context.contentResolver.openInputStream(uri).use { input ->
                 checkNotNull(input) { "Unable to open the selected document." }
                 temp.outputStream().buffered().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    val buffer = ByteArray(256 * 1024)
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
                         if (read == 0) continue
+
                         digest.update(buffer, 0, read)
                         output.write(buffer, 0, read)
+                        copied += read
+
+                        if (copied >= nextProgressAt) {
+                            val fraction = sourceSize
+                                ?.takeIf { it > 0L }
+                                ?.let { (copied.toDouble() / it.toDouble()).toFloat().coerceIn(0f, 1f) }
+                            onProgress(
+                                DocumentImportProgress(
+                                    phase = "Copying document",
+                                    detail = humanBytes(copied) +
+                                        (sourceSize?.let { " / ${humanBytes(it)}" } ?: ""),
+                                    fraction = fraction,
+                                )
+                            )
+                            nextProgressAt = copied + COPY_PROGRESS_STEP_BYTES
+                        }
                     }
                 }
             }
 
             check(temp.length() > 0L) { "Selected document is empty." }
+            currentCoroutineContext().ensureActive()
 
             val format = detectFormat(temp, sourceName, mimeType)
             val sha = digest.digest().joinToString("") { "%02x".format(it) }
@@ -91,38 +144,79 @@ class DocumentBookStore(
 
             loadMetadata(existingDir)?.let {
                 temp.delete()
-                return@runCatching it
+                onProgress(
+                    DocumentImportProgress(
+                        phase = "Already indexed",
+                        detail = it.title,
+                        fraction = 1f,
+                    )
+                )
+                return@withContext Result.success(it)
             }
 
-            val staging = File(root, "$bookId.importing")
-            staging.deleteRecursively()
-            staging.mkdirs()
-            val chaptersDir = File(staging, "chapters").apply { mkdirs() }
-
-            try {
-                val parsed = when (format) {
-                    ImportFormat.EPUB -> parseEpub(temp, bookId, sourceName, chaptersDir)
-                    ImportFormat.PDF -> parsePdf(temp, bookId, sourceName, chaptersDir)
-                    ImportFormat.DOCX -> parseDocx(temp, bookId, sourceName, chaptersDir)
-                    ImportFormat.TXT -> parseTxt(temp, bookId, sourceName, chaptersDir)
-                    ImportFormat.HTML -> parseHtml(temp, bookId, sourceName, chaptersDir)
-                }
-
-                writeMetadata(staging, parsed)
-
-                if (existingDir.exists()) existingDir.deleteRecursively()
-                check(staging.renameTo(existingDir)) {
-                    "Could not finish storing the imported document."
-                }
-
-                loadMetadata(existingDir)
-                    ?: error("Document metadata could not be reopened.")
-            } catch (t: Throwable) {
-                staging.deleteRecursively()
-                throw t
-            } finally {
-                temp.delete()
+            val stagingDir = File(root, "$bookId.importing").apply {
+                deleteRecursively()
+                mkdirs()
             }
+            staging = stagingDir
+            val chaptersDir = File(stagingDir, "chapters").apply { mkdirs() }
+
+            val parsed = when (format) {
+                ImportFormat.EPUB -> parseEpub(
+                    temp, bookId, sourceName, chaptersDir, onProgress
+                )
+                ImportFormat.PDF -> parsePdf(
+                    temp, bookId, sourceName, chaptersDir, onProgress
+                )
+                ImportFormat.DOCX -> parseDocx(
+                    temp, bookId, sourceName, chaptersDir, onProgress
+                )
+                ImportFormat.TXT -> parseTxt(
+                    temp, bookId, sourceName, chaptersDir, onProgress
+                )
+                ImportFormat.HTML -> parseHtml(
+                    temp, bookId, sourceName, chaptersDir, onProgress
+                )
+            }
+
+            currentCoroutineContext().ensureActive()
+            onProgress(
+                DocumentImportProgress(
+                    phase = "Saving index",
+                    detail = "${parsed.chapters.size} sections · ${parsed.estimatedPages} pages",
+                    fraction = 0.98f,
+                )
+            )
+
+            writeMetadata(stagingDir, parsed)
+
+            if (existingDir.exists()) existingDir.deleteRecursively()
+            check(stagingDir.renameTo(existingDir)) {
+                "Could not finish storing the imported document."
+            }
+            staging = null
+
+            val reopened = loadMetadata(existingDir)
+                ?: error("Document metadata could not be reopened.")
+
+            onProgress(
+                DocumentImportProgress(
+                    phase = "Ready",
+                    detail = reopened.title,
+                    fraction = 1f,
+                )
+            )
+            Result.success(reopened)
+        } catch (cancelled: CancellationException) {
+            staging?.deleteRecursively()
+            temp.delete()
+            throw cancelled
+        } catch (t: Throwable) {
+            staging?.deleteRecursively()
+            temp.delete()
+            Result.failure(t)
+        } finally {
+            temp.delete()
         }
     }
 
@@ -242,12 +336,23 @@ class DocumentBookStore(
         error("Unsupported document type. Choose EPUB, PDF, DOCX, TXT, HTML or HTM.")
     }
 
-    private fun parseEpub(
+    private suspend fun parseEpub(
         file: File,
         bookId: String,
         sourceName: String,
         chaptersDir: File,
+        onProgress: (DocumentImportProgress) -> Unit,
     ): BookRecord = ZipFile(file).use { zip ->
+        val importContext = currentCoroutineContext()
+        importContext.ensureActive()
+        onProgress(
+            DocumentImportProgress(
+                phase = "Reading EPUB structure",
+                detail = sourceName,
+                fraction = 0.10f,
+            )
+        )
+
         val containerEntry = zip.getEntry("META-INF/container.xml")
             ?: error("This EPUB has no META-INF/container.xml.")
         val container = zip.getInputStream(containerEntry).use(::parseXml)
@@ -291,34 +396,93 @@ class DocumentBookStore(
         }.associateBy { it.id }
 
         val tocTitles = buildTocTitleMap(zip, manifest.values)
-        val spineIds = elements(opf, "itemref")
+        val spineItems = elements(opf, "itemref")
             .map { it.getAttribute("idref") }
             .filter { it.isNotBlank() }
-
-        check(spineIds.isNotEmpty()) { "This EPUB has no readable spine." }
-
-        val writer = ChapterWriter(chaptersDir)
-        for (idref in spineIds) {
-            val item = manifest[idref] ?: continue
-            if (
-                item.mediaType.isNotBlank() &&
-                !item.mediaType.contains("html", ignoreCase = true) &&
-                !item.mediaType.contains("xhtml", ignoreCase = true)
-            ) {
-                continue
+            .mapNotNull(manifest::get)
+            .filter { item ->
+                item.mediaType.isBlank() ||
+                    item.mediaType.contains("html", ignoreCase = true) ||
+                    item.mediaType.contains("xhtml", ignoreCase = true)
             }
 
+        check(spineItems.isNotEmpty()) { "This EPUB has no readable spine." }
+
+        val writer = ChapterWriter(chaptersDir)
+        val total = spineItems.size
+
+        for ((index, item) in spineItems.withIndex()) {
+            currentCoroutineContext().ensureActive()
+
+            onProgress(
+                DocumentImportProgress(
+                    phase = "Indexing EPUB",
+                    detail = "Chapter ${index + 1} of $total",
+                    current = index + 1,
+                    total = total,
+                    fraction = (
+                        0.12f +
+                            0.83f * (index.toFloat() / total.toFloat())
+                        ).coerceIn(0f, 0.95f),
+                )
+            )
+
             val entry = zip.getEntry(item.path) ?: continue
-            val html = zip.getInputStream(entry).bufferedReader().use { it.readText() }
-            val text = extractPlainText(html)
-            if (countWords(text) <= 0L) continue
+            val extraction = try {
+                zip.getInputStream(entry).use { input ->
+                    extractXhtml(input) { importContext.ensureActive() }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Some EPUBs contain HTML that is not strict XML. Keep a
+                // compatibility fallback, but only for the affected chapter.
+                importContext.ensureActive()
+                val html = zip.getInputStream(entry)
+                    .bufferedReader()
+                    .use { reader -> reader.readText() }
+                XhtmlExtraction(
+                    text = extractPlainText(html),
+                    heading = extractHeading(html.take(32_768)),
+                )
+            }
 
             val chapterTitle = tocTitles[item.path]
-                ?: extractHeading(html)
+                ?: extraction.heading
                 ?: "Chapter ${writer.chapterCount + 1}"
 
-            writer.startSection(chapterTitle)
-            writer.addTextBlock(text)
+            val added = writer.addCompleteSection(
+                title = chapterTitle,
+                text = extraction.text,
+                checkCancelled = { importContext.ensureActive() },
+                onChunkWritten = { indexedWords ->
+                    onProgress(
+                        DocumentImportProgress(
+                            phase = "Indexing EPUB",
+                            detail = "$chapterTitle · ${humanWordCount(indexedWords)} indexed",
+                            current = index + 1,
+                            total = total,
+                            fraction = (
+                                0.12f +
+                                    0.83f * (index.toFloat() / total.toFloat())
+                                ).coerceIn(0f, 0.95f),
+                        )
+                    )
+                },
+            )
+
+            onProgress(
+                DocumentImportProgress(
+                    phase = "Indexing EPUB",
+                    detail = if (added) chapterTitle else "Skipping empty section",
+                    current = index + 1,
+                    total = total,
+                    fraction = (
+                        0.12f +
+                            0.83f * ((index + 1).toFloat() / total.toFloat())
+                        ).coerceIn(0f, 0.95f),
+                )
+            )
         }
 
         val chapters = writer.finish()
@@ -336,11 +500,12 @@ class DocumentBookStore(
         )
     }
 
-    private fun parsePdf(
+    private suspend fun parsePdf(
         file: File,
         bookId: String,
         sourceName: String,
         chaptersDir: File,
+        onProgress: (DocumentImportProgress) -> Unit,
     ): BookRecord {
         PDFBoxResourceLoader.init(context.applicationContext)
 
@@ -361,6 +526,7 @@ class DocumentBookStore(
             }
 
             for (pageIndex in 0 until pageCount) {
+                currentCoroutineContext().ensureActive()
                 val pageNumber = pageIndex + 1
                 if (pageIndex % PDF_PAGES_PER_SECTION == 0) {
                     val end = minOf(pageCount, pageNumber + PDF_PAGES_PER_SECTION - 1)
@@ -380,6 +546,24 @@ class DocumentBookStore(
                     .normalizePlainText()
                 if (pageText.isNotBlank()) {
                     writer.addTextBlock(pageText)
+                }
+
+                if (
+                    pageIndex == pageCount - 1 ||
+                    pageIndex % PDF_PROGRESS_PAGE_STEP == 0
+                ) {
+                    onProgress(
+                        DocumentImportProgress(
+                            phase = "Indexing PDF",
+                            detail = "Page $pageNumber of $pageCount",
+                            current = pageNumber,
+                            total = pageCount,
+                            fraction = (
+                                0.10f +
+                                    0.85f * (pageNumber.toFloat() / pageCount.toFloat())
+                                ).coerceIn(0f, 0.95f),
+                        )
+                    )
                 }
             }
 
@@ -405,11 +589,12 @@ class DocumentBookStore(
         }
     }
 
-    private fun parseDocx(
+    private suspend fun parseDocx(
         file: File,
         bookId: String,
         sourceName: String,
         chaptersDir: File,
+        onProgress: (DocumentImportProgress) -> Unit,
     ): BookRecord = ZipFile(file).use { zip ->
         val documentEntry = zip.getEntry("word/document.xml")
             ?: error("This DOCX has no word/document.xml.")
@@ -436,6 +621,7 @@ class DocumentBookStore(
         }
 
         val writer = ChapterWriter(chaptersDir)
+        var paragraphCount = 0
         zip.getInputStream(documentEntry).use { input ->
             streamDocxParagraphs(input) { paragraph, style ->
                 val text = paragraph.normalizePlainText()
@@ -446,8 +632,32 @@ class DocumentBookStore(
                 } else {
                     writer.addParagraph(text)
                 }
+
+                paragraphCount += 1
+                if (paragraphCount % DOCX_PROGRESS_PARAGRAPH_STEP == 0) {
+                    currentCoroutineContext().ensureActive()
+                    onProgress(
+                        DocumentImportProgress(
+                            phase = "Indexing DOCX",
+                            detail = "$paragraphCount paragraphs",
+                            current = paragraphCount,
+                            total = null,
+                            fraction = null,
+                        )
+                    )
+                }
             }
         }
+        currentCoroutineContext().ensureActive()
+        onProgress(
+            DocumentImportProgress(
+                phase = "Indexing DOCX",
+                detail = "$paragraphCount paragraphs",
+                current = paragraphCount,
+                total = null,
+                fraction = 0.95f,
+            )
+        )
 
         val chapters = writer.finish()
         check(chapters.isNotEmpty()) { "No readable text was found in this DOCX." }
@@ -464,15 +674,32 @@ class DocumentBookStore(
         )
     }
 
-    private fun parseTxt(
+    private suspend fun parseTxt(
         file: File,
         bookId: String,
         sourceName: String,
         chaptersDir: File,
+        onProgress: (DocumentImportProgress) -> Unit,
     ): BookRecord {
+        onProgress(
+            DocumentImportProgress(
+                phase = "Reading text",
+                detail = sourceName,
+                fraction = 0.25f,
+            )
+        )
+        currentCoroutineContext().ensureActive()
         val writer = ChapterWriter(chaptersDir)
         val text = readTextFile(file)
+        currentCoroutineContext().ensureActive()
         addStructuredPlainText(text, writer)
+        onProgress(
+            DocumentImportProgress(
+                phase = "Indexing TXT",
+                detail = "${writer.totalWords} words",
+                fraction = 0.95f,
+            )
+        )
         val chapters = writer.finish()
         check(chapters.isNotEmpty()) { "No readable text was found in this TXT file." }
 
@@ -488,12 +715,21 @@ class DocumentBookStore(
         )
     }
 
-    private fun parseHtml(
+    private suspend fun parseHtml(
         file: File,
         bookId: String,
         sourceName: String,
         chaptersDir: File,
+        onProgress: (DocumentImportProgress) -> Unit,
     ): BookRecord {
+        onProgress(
+            DocumentImportProgress(
+                phase = "Reading HTML",
+                detail = sourceName,
+                fraction = 0.20f,
+            )
+        )
+        currentCoroutineContext().ensureActive()
         val html = readTextFile(file)
         val title = Regex(
             "<title\\b[^>]*>(.*?)</title>",
@@ -519,14 +755,12 @@ class DocumentBookStore(
         val headings = headingRegex.findAll(html).toList()
 
         if (headings.isEmpty()) {
-            writer.startSection(title)
-            writer.addTextBlock(extractPlainText(html))
+            writer.addCompleteSection(title, extractPlainText(html))
         } else {
             val leading = html.substring(0, headings.first().range.first)
             val leadingText = extractPlainText(leading)
-            if (countWords(leadingText) > 0L) {
-                writer.startSection(title)
-                writer.addTextBlock(leadingText)
+            if (leadingText.isNotBlank()) {
+                writer.addCompleteSection(title, leadingText)
             }
 
             headings.forEachIndexed { index, match ->
@@ -536,10 +770,17 @@ class DocumentBookStore(
                 val contentStart = match.range.last + 1
                 val contentEnd = headings.getOrNull(index + 1)?.range?.first ?: html.length
                 val content = extractPlainText(html.substring(contentStart, contentEnd))
-                writer.startSection(sectionTitle)
-                writer.addTextBlock(content)
+                writer.addCompleteSection(sectionTitle, content)
             }
         }
+
+        onProgress(
+            DocumentImportProgress(
+                phase = "Indexing HTML",
+                detail = "${writer.chapterCount} sections",
+                fraction = 0.95f,
+            )
+        )
 
         val chapters = writer.finish()
         check(chapters.isNotEmpty()) { "No readable text was found in this HTML document." }
@@ -587,9 +828,9 @@ class DocumentBookStore(
         flushParagraph()
     }
 
-    private fun streamDocxParagraphs(
+    private suspend fun streamDocxParagraphs(
         input: InputStream,
-        onParagraph: (text: String, style: String?) -> Unit,
+        onParagraph: suspend (text: String, style: String?) -> Unit,
     ) {
         val parser = Xml.newPullParser().apply {
             setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
@@ -603,6 +844,7 @@ class DocumentBookStore(
         var event = parser.eventType
 
         while (event != XmlPullParser.END_DOCUMENT) {
+            currentCoroutineContext().ensureActive()
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "p" -> {
@@ -844,6 +1086,104 @@ class DocumentBookStore(
         else -> "EPUB"
     }
 
+    private fun extractXhtml(
+        input: InputStream,
+        checkCancelled: () -> Unit = {},
+    ): XhtmlExtraction {
+        val parser = Xml.newPullParser().apply {
+            setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+            setInput(input, "UTF-8")
+        }
+
+        val text = StringBuilder()
+        var heading: String? = null
+        var headingBuffer: StringBuilder? = null
+        var skipDepth = 0
+        var event = parser.eventType
+        var eventsSeen = 0
+
+        fun appendBoundary() {
+            if (text.isNotEmpty() && text.last() != '\n') {
+                text.append('\n')
+            }
+        }
+
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (eventsSeen % 512 == 0) checkCancelled()
+            eventsSeen += 1
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    val name = parser.name.lowercase(Locale.ROOT)
+                    if (name == "script" || name == "style") {
+                        skipDepth += 1
+                    } else if (skipDepth == 0) {
+                        if (
+                            name == "p" ||
+                            name == "div" ||
+                            name == "section" ||
+                            name == "article" ||
+                            name == "blockquote" ||
+                            name == "li" ||
+                            name == "br" ||
+                            name.matches(Regex("h[1-6]"))
+                        ) {
+                            appendBoundary()
+                        }
+                        if (
+                            heading == null &&
+                            (name == "h1" || name == "h2" || name == "h3")
+                        ) {
+                            headingBuffer = StringBuilder()
+                        }
+                    }
+                }
+
+                XmlPullParser.TEXT -> if (skipDepth == 0) {
+                    val value = parser.text
+                    if (!value.isNullOrBlank()) {
+                        text.append(value)
+                        headingBuffer?.append(value)
+                    }
+                }
+
+                XmlPullParser.END_TAG -> {
+                    val name = parser.name.lowercase(Locale.ROOT)
+                    if (name == "script" || name == "style") {
+                        skipDepth = (skipDepth - 1).coerceAtLeast(0)
+                    } else if (skipDepth == 0) {
+                        if (
+                            name == "p" ||
+                            name == "div" ||
+                            name == "section" ||
+                            name == "article" ||
+                            name == "blockquote" ||
+                            name == "li" ||
+                            name.matches(Regex("h[1-6]"))
+                        ) {
+                            appendBoundary()
+                        }
+                        if (
+                            heading == null &&
+                            (name == "h1" || name == "h2" || name == "h3")
+                        ) {
+                            heading = headingBuffer
+                                ?.toString()
+                                ?.cleanText()
+                                ?.takeIf { it.isNotBlank() }
+                            headingBuffer = null
+                        }
+                    }
+                }
+            }
+            event = parser.next()
+        }
+
+        return XhtmlExtraction(
+            text = text.toString().normalizePlainText(),
+            heading = heading,
+        )
+    }
+
     private fun extractPlainText(html: String): String {
         val withoutNoise = html
             .replace(
@@ -993,12 +1333,87 @@ class DocumentBookStore(
     private fun String.cleanText(): String =
         replace(Regex("\\s+"), " ").trim()
 
-    private fun String.normalizePlainText(): String =
-        replace('\u00A0', ' ')
-            .replace(Regex("[ \\t]+"), " ")
-            .replace(Regex("\\n[ \\t]+"), "\n")
-            .replace(Regex("\\n{3,}"), "\n\n")
-            .trim()
+    private fun String.normalizePlainText(): String {
+        if (isEmpty()) return ""
+
+        val out = StringBuilder(length)
+        var pendingSpace = false
+        var newlineRun = 0
+
+        fun trimTrailingSpace() {
+            if (out.isNotEmpty() && out.last() == ' ') {
+                out.setLength(out.length - 1)
+            }
+        }
+
+        for (raw in this) {
+            val ch = if (raw == '\u00A0') ' ' else raw
+            when {
+                ch == '\r' -> Unit
+
+                ch == '\n' -> {
+                    trimTrailingSpace()
+                    pendingSpace = false
+                    if (out.isNotEmpty() && newlineRun < 2) {
+                        out.append('\n')
+                        newlineRun += 1
+                    }
+                }
+
+                ch.isWhitespace() -> {
+                    pendingSpace = true
+                }
+
+                else -> {
+                    if (
+                        pendingSpace &&
+                        out.isNotEmpty() &&
+                        out.last() != '\n'
+                    ) {
+                        out.append(' ')
+                    }
+                    pendingSpace = false
+                    newlineRun = 0
+                    out.append(ch)
+                }
+            }
+        }
+
+        return out.toString().trim()
+    }
+
+    private fun querySize(uri: Uri): Long? =
+        runCatching {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
+            }
+        }.getOrNull()
+
+    private fun humanWordCount(words: Long): String = when {
+        words >= 1_000_000L ->
+            String.format(Locale.US, "%.1fM words", words / 1_000_000.0)
+        words >= 1_000L ->
+            String.format(Locale.US, "%.1fk words", words / 1_000.0)
+        else -> "$words words"
+    }
+
+    private fun humanBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024L * 1024L ->
+            String.format(Locale.US, "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024L ->
+            String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024L ->
+            String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
 
     private fun queryDisplayName(uri: Uri): String? =
         runCatching {
@@ -1027,6 +1442,7 @@ class DocumentBookStore(
         private var sectionPart = 1
         private val buffer = StringBuilder()
         private var bufferWords = 0L
+        private val bufferCheckpoints = mutableListOf<WordCheckpoint>()
 
         fun nextGlobalWord(): Long = totalWords + bufferWords
 
@@ -1034,6 +1450,32 @@ class DocumentBookStore(
             flush(continueSection = false)
             sectionTitle = title.cleanTitle()
             sectionPart = 1
+        }
+
+        /**
+         * Fast path for EPUB/HTML sections that already arrive as one complete
+         * text block. It scans word boundaries once, writes ~7,500-word chunks
+         * directly, and creates navigation checkpoints during that same scan.
+         */
+        fun addCompleteSection(
+            title: String,
+            text: String,
+            checkCancelled: () -> Unit = {},
+            onChunkWritten: (Long) -> Unit = {},
+        ): Boolean {
+            flush(continueSection = false)
+            sectionTitle = title.cleanTitle()
+            sectionPart = 1
+
+            val wrote = writeDirectChunks(
+                text = text.trim(),
+                checkCancelled = checkCancelled,
+                onChunkWritten = onChunkWritten,
+            )
+
+            sectionTitle = null
+            sectionPart = 1
+            return wrote
         }
 
         fun addTextBlock(text: String) {
@@ -1047,15 +1489,13 @@ class DocumentBookStore(
         fun addParagraph(text: String) {
             val normalized = text.normalizeBlock()
             if (normalized.isBlank()) return
+
             val words = countWords(normalized)
             if (words <= 0L) return
 
-            if (words > HARD_SECTION_WORDS) {
-                splitByWords(normalized, TARGET_SECTION_WORDS.toInt()).forEach { chunk ->
-                    if (bufferWords > 0L) flush(continueSection = true)
-                    append(chunk)
-                    flush(continueSection = true)
-                }
+            if (words >= TARGET_SECTION_WORDS) {
+                if (bufferWords > 0L) flush(continueSection = true)
+                writeDirectChunks(normalized)
                 return
             }
 
@@ -1066,7 +1506,7 @@ class DocumentBookStore(
                 flush(continueSection = true)
             }
 
-            append(normalized)
+            append(normalized, words)
         }
 
         fun finish(): List<BookChapter> {
@@ -1074,41 +1514,58 @@ class DocumentBookStore(
             return _chapters.toList()
         }
 
-        private fun append(text: String) {
-            if (buffer.isNotEmpty()) buffer.append("\n\n")
+        private fun append(
+            text: String,
+            words: Long,
+        ) {
+            val separatorLength = if (buffer.isEmpty()) 0 else 2
+            if (separatorLength > 0) buffer.append("\n\n")
+            val baseChar = buffer.length
+
+            if (bufferWords == 0L) {
+                val first = firstWordOffset(text)
+                bufferCheckpoints += WordCheckpoint(
+                    wordOffset = 0L,
+                    charOffset = baseChar + first,
+                )
+            }
+
+            var wordOffset = bufferWords
+            var inWord = false
+            text.forEachIndexed { index, ch ->
+                val nonWhitespace = !ch.isWhitespace()
+                if (nonWhitespace && !inWord) {
+                    if (
+                        wordOffset > 0L &&
+                        wordOffset % CHECKPOINT_INTERVAL_WORDS == 0L
+                    ) {
+                        bufferCheckpoints += WordCheckpoint(
+                            wordOffset = wordOffset,
+                            charOffset = baseChar + index,
+                        )
+                    }
+                    wordOffset += 1L
+                }
+                inWord = nonWhitespace
+            }
+
             buffer.append(text)
-            bufferWords += countWords(text)
+            bufferWords += words
         }
 
         private fun flush(continueSection: Boolean) {
             val text = buffer.toString().trim()
             if (text.isNotBlank() && bufferWords > 0L) {
-                val index = _chapters.size
-                val fileName = "%05d.txt".format(index)
-                File(chaptersDir, fileName).writeText(text)
-
-                val baseTitle = sectionTitle
-                    ?.takeIf { it.isNotBlank() }
-                    ?: "Section ${index + 1}"
-                val title = if (sectionPart > 1) {
-                    "$baseTitle · Part $sectionPart"
-                } else {
-                    baseTitle
-                }
-
-                _chapters += BookChapter(
-                    index = index,
-                    title = title.take(180),
-                    fileName = fileName,
-                    wordCount = bufferWords,
-                    startWord = totalWords,
-                    checkpoints = buildWordCheckpoints(text),
+                writeChapter(
+                    text = text,
+                    words = bufferWords,
+                    checkpoints = bufferCheckpoints.toList(),
                 )
-                totalWords += bufferWords
             }
 
             buffer.setLength(0)
             bufferWords = 0L
+            bufferCheckpoints.clear()
 
             if (continueSection) {
                 sectionPart += 1
@@ -1116,6 +1573,122 @@ class DocumentBookStore(
                 sectionTitle = null
                 sectionPart = 1
             }
+        }
+
+        private fun writeDirectChunks(
+            text: String,
+            checkCancelled: () -> Unit = {},
+            onChunkWritten: (Long) -> Unit = {},
+        ): Boolean {
+            if (text.isBlank()) return false
+
+            var chunkStart = -1
+            var chunkWords = 0L
+            var inWord = false
+            var checkpoints = mutableListOf<WordCheckpoint>()
+            var wrote = false
+
+            fun flushAt(endExclusive: Int) {
+                if (chunkStart < 0 || chunkWords <= 0L) return
+                val chunk = text.substring(chunkStart, endExclusive)
+                    .trimEnd()
+                if (chunk.isBlank()) return
+
+                writeChapter(
+                    text = chunk,
+                    words = chunkWords,
+                    checkpoints = checkpoints.toList(),
+                )
+                wrote = true
+                onChunkWritten(totalWords)
+                sectionPart += 1
+            }
+
+            var index = 0
+            while (index < text.length) {
+                if (index % 65_536 == 0) checkCancelled()
+                val nonWhitespace = !text[index].isWhitespace()
+
+                if (nonWhitespace && !inWord) {
+                    if (chunkStart < 0) {
+                        chunkStart = index
+                        chunkWords = 0L
+                        checkpoints = mutableListOf(
+                            WordCheckpoint(
+                                wordOffset = 0L,
+                                charOffset = 0,
+                            )
+                        )
+                    } else if (chunkWords >= TARGET_SECTION_WORDS) {
+                        flushAt(index)
+                        chunkStart = index
+                        chunkWords = 0L
+                        checkpoints = mutableListOf(
+                            WordCheckpoint(
+                                wordOffset = 0L,
+                                charOffset = 0,
+                            )
+                        )
+                    }
+
+                    if (
+                        chunkWords > 0L &&
+                        chunkWords % CHECKPOINT_INTERVAL_WORDS == 0L
+                    ) {
+                        checkpoints += WordCheckpoint(
+                            wordOffset = chunkWords,
+                            charOffset = index - chunkStart,
+                        )
+                    }
+
+                    chunkWords += 1L
+                }
+
+                inWord = nonWhitespace
+                index += 1
+            }
+
+            if (chunkStart >= 0 && chunkWords > 0L) {
+                flushAt(text.length)
+            }
+
+            return wrote
+        }
+
+        private fun writeChapter(
+            text: String,
+            words: Long,
+            checkpoints: List<WordCheckpoint>,
+        ) {
+            val index = _chapters.size
+            val fileName = "%05d.txt".format(index)
+            File(chaptersDir, fileName).writeText(text)
+
+            val baseTitle = sectionTitle
+                ?.takeIf { it.isNotBlank() }
+                ?: "Section ${index + 1}"
+            val title = if (sectionPart > 1) {
+                "$baseTitle · Part $sectionPart"
+            } else {
+                baseTitle
+            }
+
+            _chapters += BookChapter(
+                index = index,
+                title = title.take(180),
+                fileName = fileName,
+                wordCount = words,
+                startWord = totalWords,
+                checkpoints = checkpoints,
+            )
+            totalWords += words
+        }
+
+        private fun firstWordOffset(text: String): Int {
+            for (i in text.indices) {
+                if (!text[i].isWhitespace()) return i
+            }
+            return 0
         }
 
         private fun String.cleanTitle(): String =
@@ -1126,29 +1699,16 @@ class DocumentBookStore(
                 .replace(Regex("[ \\t]+"), " ")
                 .replace(Regex("\\n[ \\t]+"), "\n")
                 .trim()
-
-        private fun splitByWords(text: String, maxWords: Int): List<String> {
-            val matches = Regex("""\\S+""").findAll(text).toList()
-            if (matches.size <= maxWords) return listOf(text)
-
-            val chunks = mutableListOf<String>()
-            var start = 0
-            while (start < matches.size) {
-                val endExclusive = minOf(matches.size, start + maxWords)
-                val first = matches[start].range.first
-                val last = matches[endExclusive - 1].range.last + 1
-                chunks += text.substring(first, last).trim()
-                start = endExclusive
-            }
-            return chunks
-        }
     }
 
     private companion object {
         const val METADATA_FILE = "book.json"
         const val TARGET_SECTION_WORDS = 7_500L
-        const val HARD_SECTION_WORDS = 12_000L
+        const val CHECKPOINT_INTERVAL_WORDS = 500L
         const val PDF_PAGES_PER_SECTION = 20
+        const val PDF_PROGRESS_PAGE_STEP = 10
+        const val DOCX_PROGRESS_PARAGRAPH_STEP = 250
+        const val COPY_PROGRESS_STEP_BYTES = 1L * 1024L * 1024L
 
         val HEADING_REGEX = Regex(
             """(?i)^(chapter|book|part|section|prologue|epilogue|introduction|appendix|अध्याय|भाग|खंड)\\b.*$"""
