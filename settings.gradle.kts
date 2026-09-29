@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "OfflineNarratorPhase0"
 include(":app")
+include(":supertonic-engine")

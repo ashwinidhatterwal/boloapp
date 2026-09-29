@@ -51,9 +51,6 @@ if object_marker not in code:
 
 profile_enum = """enum class KokoroRuntimeProfile {
     CPU_BASELINE,
-    CPU_ALL_2,
-    CPU_ALL_4,
-    CPU_ALL_6,
     CPU_ALL_8,
 }
 
@@ -110,21 +107,9 @@ new_create = """        val e = OrtEnvironment.getEnvironment()
                     setIntraOpNumThreads(availableCores.coerceAtMost(4))
                 }
 
-                KokoroRuntimeProfile.CPU_ALL_2,
-                KokoroRuntimeProfile.CPU_ALL_4,
-                KokoroRuntimeProfile.CPU_ALL_6,
                 KokoroRuntimeProfile.CPU_ALL_8 -> {
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-
-                    val requestedThreads = when (runtimeProfile) {
-                        KokoroRuntimeProfile.CPU_ALL_2 -> 2
-                        KokoroRuntimeProfile.CPU_ALL_4 -> 4
-                        KokoroRuntimeProfile.CPU_ALL_6 -> 6
-                        KokoroRuntimeProfile.CPU_ALL_8 -> 8
-                        else -> 4
-                    }
-
-                    setIntraOpNumThreads(requestedThreads.coerceAtMost(availableCores))
+                    setIntraOpNumThreads(8.coerceAtMost(availableCores))
                     setInterOpNumThreads(1)
 
                     // Keep spinning disabled for this checkpoint so thread count
