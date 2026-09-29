@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 19
-        versionName = "0.4.0-player-male-voices"
+        versionCode = 20
+        versionName = "0.5.0-one-book-airplane-mode"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -80,6 +80,7 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
 
     testImplementation("junit:junit:4.13.2")
 }

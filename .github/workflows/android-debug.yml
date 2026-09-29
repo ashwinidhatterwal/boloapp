@@ -133,11 +133,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.18-Player.apk
+          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.19-One-Book-Airplane-Mode.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.18-player
-          path: build-artifacts/Bolo-v0.18-Player.apk
+          name: bolo-v0.19-one-book-airplane-mode
+          path: build-artifacts/Bolo-v0.19-One-Book-Airplane-Mode.apk
           if-no-files-found: error

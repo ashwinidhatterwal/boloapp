@@ -35,11 +35,10 @@ class KokoroTtsEngine(
 
     override fun isReady(): Boolean = ready
 
-    override fun voices(): List<TtsVoice> = if (!ready) emptyList() else {
+    override fun voices(): List<TtsVoice> =
         KokoroTTS.getAvailableVoices().map {
             TtsVoice(id = it.id, name = it.name, language = it.language)
         }
-    }
 
     override suspend fun synthesize(request: SpeechRequest): Result<SynthesisResult> = runCatching {
         check(ready) { "Kokoro is not initialized" }

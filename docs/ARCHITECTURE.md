@@ -1,47 +1,45 @@
-# Phase 0 Architecture
+# Bolo architecture — v0.19
 
-The benchmark intentionally treats TTS as a replaceable renderer.
+## Flow
 
-```text
-Benchmark UI
-   ↓
-BenchmarkViewModel
-   ↓
-TtsEngine interface
-   ├── SystemTtsEngine
-   ├── KokoroTtsEngine
-   ├── PocketTtsEngine (future adapter)
-   ├── KittenTtsEngine (future adapter)
-   └── FutureTtsEngine
-   ↓
-SynthesisResult
-   ↓
-Audio player + metrics
-```
+EPUB
+→ `EpubBookStore`
+→ chapter files + cumulative word index
+→ `BookReaderRuntime`
+→ `BookNarrationSegmenter`
+→ Kokoro `TtsEngine`
+→ `NarrationCache`
+→ `BackgroundAudioController`
+→ Media3 `MediaSessionService`
 
-The production reader will place the Narration Director, normalization, pronunciation,
-segmenter and cache *above* this interface. That means changing the model does not
-change book parsing, narration logic or playback.
+## Why locations instead of fixed pages
 
-## Engine contract
+EPUB text reflows with font size and screen size, so a stable printed page
+number generally does not exist. Bolo indexes exact word locations and exposes
+a user-friendly estimated page at 250 words/page.
 
-Every engine returns the same fields:
+The index means whole-book navigation is O(log chapters) for chapter lookup. Each chapter also stores a word→character checkpoint about every 500 words, so jumping deep inside one giant XHTML chapter only scans a small local tail instead of the chapter from the beginning.
 
-- generated audio file;
-- audio duration;
-- generation time;
-- optional sample rate.
+## Lifetime
 
-The benchmark computes RTF (real-time factor):
+`BookReaderRuntime` is an application-process singleton with its own coroutine
+scope. The UI ViewModel is intentionally thin.
 
-```text
-RTF = generation time / generated audio duration
-```
+Playback is owned by `BoloPlaybackService`, not the Activity. This avoids losing
+the player when the screen turns off or the UI leaves the foreground. The
+runtime can continue rolling Kokoro generation while the foreground playback
+service keeps the process alive.
 
-RTF below 1.0 means synthesis is faster than listening time.
+## Storage
 
-## Model storage
+`files/books/<book id>/book.json`
+`files/books/<book id>/chapters/00000.txt`
+`files/narration-cache/<sha>.wav`
 
-Kokoro weights are deliberately not inside the APK. Android's document picker copies
-the selected ONNX model into private app storage. This keeps the APK small and lets us
-swap model files without rebuilding the app.
+The imported EPUB is used only during indexing and is not duplicated afterward.
+
+## Resume
+
+The current media item carries chapter/word metadata in `MediaMetadata.extras`.
+The runtime persists the current segment start and audio millisecond position,
+so resume can reuse the same cached segment and seek within it.
