@@ -62,19 +62,28 @@ jobs:
 
           test "$(git -C .deps/kittentts-android rev-parse HEAD)" = "$KITTEN_COMMIT"
 
-      - name: Fetch pinned espeak-ng 1.52.0
+      - name: Fetch pinned espeak-ng source
         run: |
           set -euo pipefail
 
-          rm -rf .deps/kittentts-android/app/src/main/cpp/espeak-ng
+          ESPEAK_COMMIT="ba90c8e9f440ad544f674a790bb5f53878b6ffc5"
+          ESPEAK_DIR=".deps/kittentts-android/app/src/main/cpp/espeak-ng"
 
-          git clone \
-            --depth 1 \
-            --branch 1.52.0 \
-            https://github.com/espeak-ng/espeak-ng.git \
-            .deps/kittentts-android/app/src/main/cpp/espeak-ng
+          rm -rf "$ESPEAK_DIR"
+          mkdir -p "$ESPEAK_DIR"
 
-          test "$(git -C .deps/kittentts-android/app/src/main/cpp/espeak-ng describe --tags --exact-match)" = "1.52.0"
+          git -C "$ESPEAK_DIR" init
+          git -C "$ESPEAK_DIR" remote add origin \
+            https://github.com/espeak-ng/espeak-ng.git
+          git -C "$ESPEAK_DIR" fetch --depth=1 origin "$ESPEAK_COMMIT"
+          git -C "$ESPEAK_DIR" checkout --detach FETCH_HEAD
+
+          test "$(git -C "$ESPEAK_DIR" rev-parse HEAD)" = "$ESPEAK_COMMIT"
+
+          # Guard against the old 1.52 fallback that expands PATH_ESPEAK_DATA
+          # through a comma expression and fails under Android NDK 27.
+          grep -q '#    define PATH_ESPEAK_DATA "/espeak-ng-data"' \
+            "$ESPEAK_DIR/src/libespeak-ng/speech.h"
 
       - name: Build English espeak-ng data
         run: |
@@ -225,13 +234,13 @@ jobs:
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/build-artifacts"
-          cp "$APK" "$GITHUB_WORKSPACE/build-artifacts/KittenTTS-Micro-v0.8-arm64.apk"
+          cp "$APK" "$GITHUB_WORKSPACE/build-artifacts/KittenTTS-Micro-v0.8-arm64-espeak-fixed.apk"
 
-          sha256sum "$GITHUB_WORKSPACE/build-artifacts/KittenTTS-Micro-v0.8-arm64.apk"
+          sha256sum "$GITHUB_WORKSPACE/build-artifacts/KittenTTS-Micro-v0.8-arm64-espeak-fixed.apk"
 
       - name: Upload Kitten Micro engine APK
         uses: actions/upload-artifact@v4
         with:
-          name: kitten-tts-micro-v0.8-arm64
-          path: build-artifacts/KittenTTS-Micro-v0.8-arm64.apk
+          name: kitten-tts-micro-v0.8-arm64-espeak-fixed
+          path: build-artifacts/KittenTTS-Micro-v0.8-arm64-espeak-fixed.apk
           if-no-files-found: error

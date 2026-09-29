@@ -33,10 +33,10 @@ Therefore:
 1. Keep Bolo installed.
 2. Uninstall only the separate `KittenTTS` / `KittenTTS Nano` engine app.
 3. From GitHub Actions, download artifact:
-   `kitten-tts-micro-v0.8-arm64`
+   `kitten-tts-micro-v0.8-arm64-espeak-fixed`
 4. Extract the artifact ZIP.
 5. Install:
-   `KittenTTS-Micro-v0.8-arm64.apk`
+   `KittenTTS-Micro-v0.8-arm64-espeak-fixed.apk`
 6. Open Bolo.
 7. Select Kitten again.
 
