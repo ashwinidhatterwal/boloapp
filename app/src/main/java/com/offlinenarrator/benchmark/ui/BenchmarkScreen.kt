@@ -56,6 +56,11 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
         onResult = { uri -> uri?.let(viewModel::importKokoroModel) },
     )
 
+    val fp16ModelPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri -> uri?.let(viewModel::importKokoroFp16Model) },
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -120,14 +125,14 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = viewModel::synthesize,
-                    enabled = state.isReady && !state.isSynthesizing && state.text.isNotBlank(),
+                    enabled = state.isReady && !state.isSynthesizing && !state.isLabRunning && state.text.isNotBlank(),
                 ) {
                     Text(if (state.isSynthesizing) "Working…" else "Generate")
                 }
 
                 OutlinedButton(
                     onClick = viewModel::playResult,
-                    enabled = state.result != null && !state.isPlaying,
+                    enabled = state.result != null && !state.isPlaying && !state.isLabRunning,
                 ) {
                     Text("Play")
                 }
@@ -139,9 +144,9 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 }
             }
 
-            if (state.isSynthesizing) {
+            if (state.isSynthesizing || state.isLabRunning) {
                 TextButton(onClick = viewModel::cancelSynthesis) {
-                    Text("Cancel synthesis")
+                    Text(if (state.isLabRunning) "Cancel lab" else "Cancel synthesis")
                 }
             }
 
@@ -156,6 +161,9 @@ fun BenchmarkScreen(viewModel: BenchmarkViewModel) {
                 onStress = { viewModel.runStress(5) },
                 onImport = { modelPicker.launch(arrayOf("application/octet-stream", "*/*")) },
                 onDeleteModel = viewModel::deleteKokoroModel,
+                onImportFp16 = { fp16ModelPicker.launch(arrayOf("application/octet-stream", "*/*")) },
+                onDeleteFp16 = viewModel::deleteKokoroFp16Model,
+                onRunPerformanceLab = viewModel::runPerformanceLab,
                 onRuntimeProfile = viewModel::selectKokoroRuntimeProfile,
                 onOpenModelPage = {
                     context.startActivity(
@@ -379,6 +387,9 @@ private fun AdvancedCard(
     onStress: () -> Unit,
     onImport: () -> Unit,
     onDeleteModel: () -> Unit,
+    onImportFp16: () -> Unit,
+    onDeleteFp16: () -> Unit,
+    onRunPerformanceLab: () -> Unit,
     onRuntimeProfile: (String) -> Unit,
     onOpenModelPage: () -> Unit,
 ) {
@@ -438,6 +449,17 @@ private fun AdvancedCard(
                 }
             }
 
+            if (state.selectedEngineId == "kokoro") {
+                HorizontalDivider()
+                PerformanceLabSection(
+                    state = state,
+                    onImportFp16 = onImportFp16,
+                    onDeleteFp16 = onDeleteFp16,
+                    onRun = onRunPerformanceLab,
+                    onOpenModelPage = onOpenModelPage,
+                )
+            }
+
             if (state.selectedEngineId == "experimental") {
                 HorizontalDivider()
                 Text("Experimental provider", fontWeight = FontWeight.SemiBold)
@@ -455,7 +477,7 @@ private fun AdvancedCard(
             HorizontalDivider()
             OutlinedButton(
                 onClick = onStress,
-                enabled = state.isReady && !state.isSynthesizing && state.text.isNotBlank(),
+                enabled = state.isReady && !state.isSynthesizing && !state.isLabRunning && state.text.isNotBlank(),
             ) {
                 Text("Run 5× stress test")
             }
@@ -499,6 +521,178 @@ private fun AdvancedCard(
                     } ?: "Unavailable",
                 )
                 Metric("Thermal", d.thermalStatus)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PerformanceLabSection(
+    state: BenchmarkUiState,
+    onImportFp16: () -> Unit,
+    onDeleteFp16: () -> Unit,
+    onRun: () -> Unit,
+    onOpenModelPage: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Kokoro Performance Lab", fontWeight = FontWeight.Bold)
+        Text(
+            "One run compares FP32 and, when installed, FP16 across CPU 2/4/6/8. The fastest successful configuration is then stress-tested and validated on long text.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Metric(
+            "FP32",
+            if (state.kokoroModelPresent) {
+                "${formatBytes(state.kokoroModelBytes)} · ready"
+            } else {
+                "missing"
+            },
+        )
+
+        if (state.fp16ModelPresent) {
+            Metric(
+                "FP16",
+                "${formatBytes(state.fp16ModelBytes)} · ready",
+            )
+            state.fp16ModelSha256?.let { sha ->
+                Text(
+                    "FP16 SHA-256 ${sha.take(16)}…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = onImportFp16,
+                    enabled = !state.isLabRunning,
+                ) { Text("Replace FP16") }
+                TextButton(
+                    onClick = onDeleteFp16,
+                    enabled = !state.isLabRunning,
+                ) { Text("Remove FP16") }
+            }
+        } else {
+            Text(
+                "FP16 is optional. Import official model_fp16.onnx to add precision comparison; otherwise the suite still benchmarks FP32.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = onImportFp16,
+                    enabled = !state.isLabRunning,
+                ) { Text("Import FP16") }
+                TextButton(onClick = onOpenModelPage) { Text("Model source") }
+            }
+        }
+
+        Button(
+            onClick = onRun,
+            enabled = state.kokoroModelPresent && !state.isLabRunning && !state.isSynthesizing,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (state.isLabRunning) "Performance Lab running…" else "Run full Kokoro suite")
+        }
+
+        state.labProgress?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        state.labReport?.let { report ->
+            if (report.entries.isNotEmpty()) {
+                Text("Quick matrix", fontWeight = FontWeight.SemiBold)
+
+                report.entries.forEach { entry ->
+                    val value = if (entry.succeeded) {
+                        buildString {
+                            append("RTF ")
+                            append(String.format(Locale.US, "%.3f", entry.rtf))
+                            entry.rssMb?.let {
+                                append(" · RSS ")
+                                append(String.format(Locale.US, "%.0f MB", it))
+                            }
+                            entry.temperatureC?.let {
+                                append(" · ")
+                                append(String.format(Locale.US, "%.1f °C", it))
+                            }
+                        }
+                    } else {
+                        "Failed · ${entry.error ?: "unknown error"}"
+                    }
+
+                    Text(
+                        "${entry.modelLabel} · ${entry.profileLabel}",
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        value,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (entry.succeeded) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+            }
+
+            if (report.winnerModelLabel != null) {
+                HorizontalDivider()
+                Text("Fastest measured", fontWeight = FontWeight.SemiBold)
+                Text(
+                    buildString {
+                        append(report.winnerModelLabel)
+                        append(" · ")
+                        append(report.winnerProfileLabel ?: report.winnerProfileId.orEmpty())
+                        report.winnerRtf?.let {
+                            append(" · RTF ")
+                            append(String.format(Locale.US, "%.3f", it))
+                        }
+                    }
+                )
+
+                report.validation?.let { validation ->
+                    validation.stressMeanRtf?.let {
+                        Metric("5× mean RTF", String.format(Locale.US, "%.3f", it))
+                    }
+                    if (validation.stressBestRtf != null && validation.stressWorstRtf != null) {
+                        Metric(
+                            "5× best / worst",
+                            String.format(
+                                Locale.US,
+                                "%.3f / %.3f",
+                                validation.stressBestRtf,
+                                validation.stressWorstRtf,
+                            ),
+                        )
+                    }
+                    validation.longRtf?.let {
+                        Metric("Long-text RTF", String.format(Locale.US, "%.3f", it))
+                    }
+                    validation.finalRssMb?.let {
+                        Metric("Final RSS", String.format(Locale.US, "%.0f MB", it))
+                    }
+                    validation.finalTemperatureC?.let {
+                        Metric("Final battery temp", String.format(Locale.US, "%.1f °C", it))
+                    }
+                    validation.finalThermalStatus?.let {
+                        Metric("Final thermal", it)
+                    }
+                    validation.error?.let {
+                        Text(
+                            "Validation issue: $it",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         }
     }

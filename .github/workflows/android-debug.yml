@@ -60,6 +60,14 @@ jobs:
           ! grep -R "libs.plugins.vanniktech.publish" build.gradle.kts library/build.gradle.kts
           ! grep -R "mavenPublishing" library/build.gradle.kts
 
+          # Verify the Phase-0 performance-lab patch before spending time on
+          # the native/AAR build.
+          grep -q "CPU_ALL_2" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+          grep -q "CPU_ALL_8" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+          grep -q "MAX_MODEL_TOKENS = 500" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+          grep -q "chunkTextForModel" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+          ! grep -q "XNNPACK_" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
 
@@ -104,6 +112,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: boloapp-phase0-v0.14-kokoro-cpu-tuning-checkpoint
+          name: boloapp-phase0-v0.15-kokoro-performance-lab
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
