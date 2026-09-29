@@ -1,19 +1,8 @@
 # Bolo
 
-Current checkpoint: **v0.17 Kokoro Reader Prototype**
+Current checkpoint: **v0.18 Player + Narrator Voices**
 
-Bolo is now Kokoro-only. The app turns pasted text into rolling locally
-generated narration and starts playback before all text is synthesized.
+Kokoro-only offline reader with a player-style interface, rolling generation,
+local cache, real playback-speed control, and curated narrator voices.
 
-Key prototype features:
-- offline Kokoro narration
-- rolling generation + local cache
-- 1.0x–2.0x playback speed
-- thermal-aware synthesis pause
-- long-text segmentation
-- clean reader UI
-
-Build artifact:
-`bolo-v0.17-kokoro-reader`
-
-See `BOLO_V0.17_CHECKPOINT.md`.
+Artifact: `bolo-v0.18-player`

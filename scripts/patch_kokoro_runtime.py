@@ -366,3 +366,50 @@ helpers = """    /**
 code = code.replace(internals_marker, internals_marker + "\n" + helpers, 1)
 
 src.write_text(code)
+
+
+# Bolo curated narrator pack.
+voice_src = Path("library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroVoice.kt")
+voice_code = voice_src.read_text()
+
+old_voice_block = """        /** The single voice bundled in the Free tier (American English female). */
+        val AF_HEART = KokoroVoice(
+            "af_heart", "Heart (American Female)", "en-US", "en-us", Gender.FEMALE, Grade.A,
+        )
+
+        /** Voices bundled in this build. Pro ships all 54; Free ships [AF_HEART]. */
+        val BUNDLED: List<KokoroVoice> = listOf(AF_HEART)
+"""
+
+new_voice_block = """        val AF_HEART = KokoroVoice(
+            "af_heart", "Heart · American Female", "en-US", "en-us", Gender.FEMALE, Grade.A,
+        )
+
+        val AM_ONYX = KokoroVoice(
+            "am_onyx", "Onyx · American Male", "en-US", "en-us", Gender.MALE, Grade.A,
+        )
+
+        val AM_MICHAEL = KokoroVoice(
+            "am_michael", "Michael · American Male", "en-US", "en-us", Gender.MALE, Grade.A,
+        )
+
+        val BM_GEORGE = KokoroVoice(
+            "bm_george", "George · British Male", "en-GB", "en-gb", Gender.MALE, Grade.A,
+        )
+
+        val AM_FENRIR = KokoroVoice(
+            "am_fenrir", "Fenrir · American Male", "en-US", "en-us", Gender.MALE, Grade.A,
+        )
+
+        val BUNDLED: List<KokoroVoice> = listOf(
+            AM_ONYX,
+            AM_MICHAEL,
+            BM_GEORGE,
+            AM_FENRIR,
+            AF_HEART,
+        )
+"""
+
+if old_voice_block not in voice_code:
+    raise SystemExit("Expected KokoroVoice block not found")
+voice_src.write_text(voice_code.replace(old_voice_block, new_voice_block, 1))

@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 18
-        versionName = "0.3.0.1-kokoro-reader-ci-fixed"
+        versionCode = 19
+        versionName = "0.4.0-player-male-voices"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

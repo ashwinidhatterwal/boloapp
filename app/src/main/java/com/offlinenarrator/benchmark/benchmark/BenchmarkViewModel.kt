@@ -25,13 +25,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import kotlin.math.roundToInt
 
 data class BenchmarkUiState(
     val isPreparing: Boolean = false,
     val isReady: Boolean = false,
     val isGenerating: Boolean = false,
     val readerStarted: Boolean = false,
+    val playbackStarted: Boolean = false,
     val isPlaying: Boolean = false,
     val isPaused: Boolean = false,
     val finished: Boolean = false,
@@ -56,6 +56,7 @@ data class BenchmarkUiState(
 
 class BenchmarkViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application.applicationContext
+    private val prefs = app.getSharedPreferences("bolo_reader", 0)
     private val modelStore = KokoroModelStore(app, "fp32")
     private val cache = NarrationCache(app)
     private val engine = KokoroTtsEngine(
@@ -64,13 +65,13 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         KokoroRuntimeProfile.CPU_ALL_8,
     )
 
-    private val player = RollingAudioPlayer(app) {
-        refreshPlaybackState()
-    }
+    private val player = RollingAudioPlayer(app) { refreshPlaybackState() }
+    private val savedSpeed = prefs.getFloat("playback_speed", 1.0f).coerceIn(0.75f, 2.0f)
 
     private val _state = MutableStateFlow(
         BenchmarkUiState(
             kokoroModelPresent = modelStore.exists(),
+            playbackSpeed = savedSpeed,
             deviceSnapshot = DeviceDiagnostics.capture(app),
         )
     )
@@ -80,6 +81,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
     private var progressJob: Job? = null
 
     init {
+        player.setSpeed(savedSpeed)
         viewModelScope.launch {
             _state.update { it.copy(cacheBytes = cache.sizeBytes()) }
             prepareEngine()
@@ -88,21 +90,23 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setText(value: String) {
         if (_state.value.readerStarted) return
-        _state.update { it.copy(text = value) }
+        _state.update { it.copy(text = value, finished = false) }
     }
 
     fun useSample() {
         if (_state.value.readerStarted) return
-        _state.update { it.copy(text = BenchmarkPassages.longForm) }
+        _state.update { it.copy(text = BenchmarkPassages.longForm, finished = false) }
     }
 
     fun selectVoice(id: String) {
         if (_state.value.readerStarted) return
-        _state.update { it.copy(selectedVoiceId = id) }
+        prefs.edit().putString("voice_id", id).apply()
+        _state.update { it.copy(selectedVoiceId = id, finished = false) }
     }
 
     fun setPlaybackSpeed(speed: Float) {
         val safe = speed.coerceIn(0.75f, 2.0f)
+        prefs.edit().putFloat("playback_speed", safe).apply()
         player.setSpeed(safe)
         _state.update { it.copy(playbackSpeed = safe) }
         refreshPlaybackState()
@@ -123,7 +127,6 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
             _state.update {
                 it.copy(
                     isPreparing = false,
-                    isReady = false,
                     voices = emptyList(),
                     selectedVoiceId = null,
                 )
@@ -133,7 +136,13 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
 
         val result = engine.initialize()
         val voices = if (result.isSuccess) engine.voices() else emptyList()
-        val preferred = voices.firstOrNull { it.id == "af_heart" } ?: voices.firstOrNull()
+        val savedVoice = prefs.getString("voice_id", null)
+        val preferred = voices.firstOrNull { it.id == savedVoice }
+            ?: voices.firstOrNull { it.id == DEFAULT_VOICE_ID }
+            ?: voices.firstOrNull { it.id == "af_heart" }
+            ?: voices.firstOrNull()
+
+        preferred?.id?.let { prefs.edit().putString("voice_id", it).apply() }
 
         _state.update {
             it.copy(
@@ -141,11 +150,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                 isReady = result.isSuccess,
                 voices = voices,
                 selectedVoiceId = preferred?.id,
-                status = if (result.isSuccess) {
-                    "Ready · narration stays on-device."
-                } else {
-                    "Kokoro failed to load."
-                },
+                status = if (result.isSuccess) "Ready." else "Kokoro failed to load.",
                 error = result.exceptionOrNull()?.message,
                 deviceSnapshot = DeviceDiagnostics.capture(app),
                 kokoroModelPresent = modelStore.exists(),
@@ -155,16 +160,8 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun importKokoroModel(uri: Uri) {
         stopReading()
-
         viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    isPreparing = true,
-                    error = null,
-                    status = "Importing Kokoro model…",
-                )
-            }
-
+            _state.update { it.copy(isPreparing = true, error = null, status = "Importing Kokoro model…") }
             val result = modelStore.importFrom(uri)
             if (result.isFailure) {
                 _state.update {
@@ -176,7 +173,6 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 return@launch
             }
-
             prepareEngine()
         }
     }
@@ -186,26 +182,25 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         if (!snapshot.isReady || snapshot.text.isBlank() || readerJob?.isActive == true) return
 
         stopReading()
-
         val segments = NarrationSegmenter.split(snapshot.text)
         if (segments.isEmpty()) {
             _state.update { it.copy(error = "Nothing to read.") }
             return
         }
 
-        val voiceId = snapshot.selectedVoiceId ?: "af_heart"
+        val voiceId = snapshot.selectedVoiceId ?: DEFAULT_VOICE_ID
         val speed = snapshot.playbackSpeed
-
         player.reset(speed)
 
         _state.update {
             it.copy(
                 isGenerating = true,
                 readerStarted = true,
+                playbackStarted = false,
                 isPlaying = false,
                 isPaused = false,
                 finished = false,
-                status = "Preparing first audio…",
+                status = preparationStatus(speed),
                 error = null,
                 totalSegments = segments.size,
                 generatedSegments = 0,
@@ -230,11 +225,9 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                 segments.forEachIndexed { index, segment ->
                     ensureActive()
 
-                    // Once enough audio is prepared, allow the inference engine
-                    // to sleep until playback consumes part of the reserve.
                     while (
                         player.started &&
-                        player.bufferedSourceMs() >= targetSourceBufferMs(_state.value.playbackSpeed)
+                        player.bufferedListeningMs() >= targetListeningBufferMs(_state.value.playbackSpeed)
                     ) {
                         delay(400L)
                         ensureActive()
@@ -258,9 +251,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                                 )
                             }
                         } catch (_: TimeoutCancellationException) {
-                            Result.failure(
-                                IllegalStateException("A narration segment timed out.")
-                            )
+                            Result.failure(IllegalStateException("A narration segment timed out."))
                         }
 
                         if (synthesized.isFailure) {
@@ -271,7 +262,6 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                         val result = synthesized.getOrThrow()
                         generationMs += result.generationTimeMs
                         generatedAudioMs += result.audioDurationMs
-
                         cache.put(
                             modelSha = modelSha,
                             voiceId = voiceId,
@@ -285,35 +275,30 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
 
                     val meanRtf = if (generatedAudioMs > 0L) {
                         generationMs.toDouble() / generatedAudioMs.toDouble()
-                    } else {
-                        null
-                    }
+                    } else null
 
                     _state.update {
                         it.copy(
                             generatedSegments = index + 1,
                             cacheHits = cacheHits,
                             meanGenerationRtf = meanRtf,
-                            status = if (player.started) {
-                                "Reading · preparing ahead…"
-                            } else {
-                                "Preparing first audio…"
-                            },
+                            status = if (player.started) "Playing · preparing ahead" else preparationStatus(_state.value.playbackSpeed),
                         )
                     }
 
                     if (
                         !player.started &&
                         (
-                            player.bufferedSourceMs() >= initialSourceBufferMs(_state.value.playbackSpeed) ||
+                            player.bufferedListeningMs() >= initialListeningBufferMs(_state.value.playbackSpeed) ||
                                 index == segments.lastIndex
                         )
                     ) {
                         player.start()
                         _state.update {
                             it.copy(
+                                playbackStarted = true,
                                 isPlaying = true,
-                                status = "Reading · preparing ahead…",
+                                status = "Playing · preparing ahead",
                             )
                         }
                     }
@@ -324,9 +309,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
 
                 _state.update {
                     it.copy(
+                        playbackStarted = player.started,
                         isGenerating = false,
                         cacheBytes = cache.sizeBytes(),
-                        status = "Reading · all audio prepared.",
+                        status = "Playing · audio prepared",
                         deviceSnapshot = DeviceDiagnostics.capture(app),
                     )
                 }
@@ -348,13 +334,8 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun pauseOrResume() {
         val snapshot = _state.value
-        if (!snapshot.readerStarted || snapshot.finished) return
-
-        if (player.isPlaying()) {
-            player.pause()
-        } else {
-            player.resume()
-        }
+        if (!snapshot.readerStarted || !snapshot.playbackStarted || snapshot.finished) return
+        if (player.isPlaying()) player.pause() else player.resume()
         refreshPlaybackState()
     }
 
@@ -370,10 +351,11 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 isGenerating = false,
                 readerStarted = false,
+                playbackStarted = false,
                 isPlaying = false,
                 isPaused = false,
                 finished = false,
-                status = if (it.isReady) "Ready · narration stays on-device." else it.status,
+                status = if (it.isReady) "Ready." else it.status,
                 totalSegments = 0,
                 generatedSegments = 0,
                 currentSegment = 0,
@@ -388,12 +370,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         if (_state.value.readerStarted) return
         viewModelScope.launch {
             cache.clear()
-            _state.update {
-                it.copy(
-                    cacheBytes = 0L,
-                    status = "Prepared audio cache cleared.",
-                )
-            }
+            _state.update { it.copy(cacheBytes = 0L, status = "Prepared audio cleared.") }
         }
     }
 
@@ -402,7 +379,6 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         progressJob = viewModelScope.launch {
             while (isActive) {
                 refreshPlaybackState()
-
                 if (player.isEnded()) {
                     readerJob?.cancel()
                     readerJob = null
@@ -410,6 +386,7 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                         it.copy(
                             isGenerating = false,
                             readerStarted = false,
+                            playbackStarted = false,
                             isPlaying = false,
                             isPaused = false,
                             finished = true,
@@ -420,25 +397,20 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     break
                 }
-
                 delay(500L)
             }
         }
     }
 
     private fun refreshPlaybackState() {
-        val started = player.started
-        val playing = player.isPlaying()
-        val paused = player.isPaused()
-
         _state.update {
             it.copy(
-                isPlaying = playing,
-                isPaused = paused,
+                playbackStarted = player.started,
+                isPlaying = player.isPlaying(),
+                isPaused = player.isPaused(),
                 currentSegment = player.currentSegmentNumber(),
                 bufferedListeningMs = player.bufferedListeningMs(),
                 underruns = player.underruns,
-                readerStarted = started && !player.isEnded(),
             )
         }
     }
@@ -447,34 +419,39 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         while (true) {
             val snapshot = DeviceDiagnostics.capture(app)
             val blocked = snapshot.thermalStatus in THERMAL_BLOCK_STATES
-
             _state.update {
                 it.copy(
                     thermalPaused = blocked,
                     deviceSnapshot = snapshot,
-                    status = if (blocked) {
-                        "Phone is hot · generation paused while cached audio keeps playing."
-                    } else {
-                        it.status
-                    },
+                    status = if (blocked) "Cooling · cached audio can continue" else it.status,
                 )
             }
-
             if (!blocked) return
             delay(2_000L)
         }
     }
 
-    private fun initialSourceBufferMs(speed: Float): Long {
-        // Source-audio time. At faster playback, prepare proportionally more
-        // speech before pressing play.
-        return (12_000L * speed.coerceIn(1.0f, 2.0f)).roundToInt().toLong()
+    private fun preparationStatus(speed: Float): String =
+        if (speed >= 1.5f) "Preparing larger ${displaySpeed(speed)} reserve…" else "Preparing audio…"
+
+    private fun initialListeningBufferMs(speed: Float): Long = when {
+        speed >= 2.0f -> 120_000L
+        speed >= 1.75f -> 90_000L
+        speed >= 1.5f -> 60_000L
+        speed >= 1.25f -> 30_000L
+        else -> 12_000L
     }
 
-    private fun targetSourceBufferMs(speed: Float): Long {
-        // About 45 seconds of listening reserve at the selected playback speed.
-        return (45_000L * speed.coerceIn(1.0f, 2.0f)).roundToInt().toLong()
+    private fun targetListeningBufferMs(speed: Float): Long = when {
+        speed >= 2.0f -> 300_000L
+        speed >= 1.75f -> 240_000L
+        speed >= 1.5f -> 180_000L
+        speed >= 1.25f -> 90_000L
+        else -> 45_000L
     }
+
+    private fun displaySpeed(speed: Float): String =
+        if (speed == speed.toInt().toFloat()) "${speed.toInt()}.0×" else "${speed}×"
 
     override fun onCleared() {
         readerJob?.cancel()
@@ -486,12 +463,8 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private companion object {
+        const val DEFAULT_VOICE_ID = "am_onyx"
         const val SEGMENT_TIMEOUT_MS = 90_000L
-        val THERMAL_BLOCK_STATES = setOf(
-            "Severe",
-            "Critical",
-            "Emergency",
-            "Shutdown",
-        )
+        val THERMAL_BLOCK_STATES = setOf("Severe", "Critical", "Emergency", "Shutdown")
     }
 }
