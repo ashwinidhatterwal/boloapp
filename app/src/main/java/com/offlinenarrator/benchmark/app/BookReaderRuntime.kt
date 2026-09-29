@@ -8,6 +8,9 @@ import com.offlinenarrator.benchmark.book.BookRecord
 import com.offlinenarrator.benchmark.book.CharacterVoiceStore
 import com.offlinenarrator.benchmark.book.DocumentImportProgress
 import com.offlinenarrator.benchmark.book.NarrationDirector
+import com.offlinenarrator.benchmark.book.NarrationBatcher
+import com.offlinenarrator.benchmark.book.NarrationBoundary
+import com.offlinenarrator.benchmark.book.NarrationPacing
 import com.offlinenarrator.benchmark.book.NarrationRole
 import com.offlinenarrator.benchmark.book.ReaderLine
 import com.offlinenarrator.benchmark.book.SentenceSegmenter
@@ -752,9 +755,11 @@ class BookReaderRuntime private constructor(
                         chapterText = chapterText,
                         startWord = chapterStartWord,
                         checkpoints = chapter.checkpoints,
+                        sourceFormat = book.format,
                     )
+                    val batches = NarrationBatcher.batch(units)
 
-                    for ((unitIndex, unit) in units.withIndex()) {
+                    for ((batchIndex, batch) in batches.withIndex()) {
                         ensureActive()
 
                         while (
@@ -769,25 +774,41 @@ class BookReaderRuntime private constructor(
                         awaitThermalHeadroom()
 
                         val unitVoiceId = if (
-                            unit.role == NarrationRole.DIALOGUE &&
-                            unit.speakerKey != null
+                            batch.role == NarrationRole.DIALOGUE &&
+                            batch.speakerKey != null
                         ) {
-                            characterNames += unit.speakerKey
-                            characterVoiceStore.voiceFor(
+                            characterNames += batch.speakerKey
+                            val accentVoiceId = characterVoiceStore.voiceFor(
                                 bookId = book.id,
-                                speakerKey = unit.speakerKey,
+                                speakerKey = batch.speakerKey,
                                 narratorVoiceId = voiceId,
                                 availableVoices = _state.value.voices,
+                            )
+                            engine.subtleCharacterVoiceId(
+                                narratorVoiceId = voiceId,
+                                characterVoiceId = accentVoiceId,
                             )
                         } else {
                             voiceId
                         }
 
-                        if (unit.role == NarrationRole.DIALOGUE) {
-                            dialogueSegments += 1
+                        if (batch.role == NarrationRole.DIALOGUE) {
+                            dialogueSegments += batch.unitCount
                         }
 
-                        val cacheTextKey = "${unit.text}\u0000pause=${unit.pauseAfterMs}"
+                        val effectiveBoundary = effectiveBoundaryFor(
+                            book = book,
+                            chapterIndex = chapterIndex,
+                            batchIndex = batchIndex,
+                            batchesCount = batches.size,
+                            planned = batch.boundaryAfter,
+                        )
+                        val timing = NarrationPacing.timing(
+                            boundary = effectiveBoundary,
+                            cue = batch.deliveryCue,
+                        )
+                        val cacheTextKey =
+                            "${batch.text}\u0000natural-boundary=${effectiveBoundary.name}:${timing.targetMs}"
                         val cached = cache.get(
                             modelSha = modelSha,
                             voiceId = unitVoiceId,
@@ -804,7 +825,7 @@ class BookReaderRuntime private constructor(
                                         ensureActive()
                                         engine.synthesize(
                                             SpeechRequest(
-                                                text = unit.text,
+                                                text = batch.text,
                                                 speed = 1.0f,
                                                 voiceId = unitVoiceId,
                                             )
@@ -823,13 +844,17 @@ class BookReaderRuntime private constructor(
                             }
 
                             val result = synthesized.getOrThrow()
-                            val appendedPauseMs = withContext(Dispatchers.IO) {
-                                WavAudioFinisher.appendSilence(
+                            val boundaryResult = withContext(Dispatchers.IO) {
+                                WavAudioFinisher.normalizeTrailingSilence(
                                     file = result.audioFile,
-                                    pauseMs = unit.pauseAfterMs,
+                                    minMs = timing.minMs,
+                                    targetMs = timing.targetMs,
+                                    maxMs = timing.maxMs,
                                 )
                             }
-                            val finishedDurationMs = result.audioDurationMs + appendedPauseMs
+                            val finishedDurationMs =
+                                (result.audioDurationMs + boundaryResult.durationAdjustmentMs)
+                                    .coerceAtLeast(1L)
                             generationMs += result.generationTimeMs
                             generatedAudioMs += finishedDurationMs
 
@@ -850,11 +875,11 @@ class BookReaderRuntime private constructor(
                             chapterTitle = chapter.title,
                             chapterIndex = chapter.index,
                             chapterGlobalStart = chapter.startWord,
-                            segmentStartWord = unit.startWord,
-                            segmentWordCount = unit.wordCount,
+                            segmentStartWord = batch.startWord,
+                            segmentWordCount = batch.wordCount,
                         )
 
-                        generatedSegments += 1
+                        generatedSegments += batch.unitCount
 
                         val meanRtf = if (generatedAudioMs > 0L) {
                             generationMs.toDouble() / generatedAudioMs.toDouble()
@@ -879,7 +904,7 @@ class BookReaderRuntime private constructor(
 
                         val isLastUnitInBook =
                             chapterIndex == book.chapters.lastIndex &&
-                                unitIndex == units.lastIndex
+                                batchIndex == batches.lastIndex
 
                         if (
                             !player.started &&
@@ -1073,7 +1098,12 @@ class BookReaderRuntime private constructor(
         chapterLinesJob = scope.launch {
             runCatching {
                 val text = bookStore.readChapter(book.id, chapterIndex)
-                SentenceSegmenter.readerLines(text)
+                SentenceSegmenter.readerLines(
+                    text = text,
+                    singleNewlineIsParagraph =
+                        book.format.equals("EPUB", true) ||
+                            book.format.equals("HTML", true),
+                )
             }.onSuccess { lines ->
                 val snapshot = _state.value
                 if (snapshot.activeBook?.id == book.id && snapshot.currentChapterIndex == chapterIndex) {
@@ -1180,6 +1210,30 @@ class BookReaderRuntime private constructor(
         }
     }
 
+    private fun effectiveBoundaryFor(
+        book: BookRecord,
+        chapterIndex: Int,
+        batchIndex: Int,
+        batchesCount: Int,
+        planned: NarrationBoundary,
+    ): NarrationBoundary {
+        if (batchIndex != batchesCount - 1) return planned
+        if (chapterIndex >= book.chapters.lastIndex) return NarrationBoundary.CHAPTER
+
+        val current = book.chapters[chapterIndex].title
+        val next = book.chapters[chapterIndex + 1].title
+        val currentBase = current.substringBefore(" · Part")
+        val nextBase = next.substringBefore(" · Part")
+        return if (
+            next.contains(" · Part") &&
+            currentBase.equals(nextBase, ignoreCase = true)
+        ) {
+            NarrationBoundary.PARAGRAPH
+        } else {
+            NarrationBoundary.CHAPTER
+        }
+    }
+
     private fun preparationStatus(speed: Float): String =
         if (speed >= 1.5f) {
             "Preparing a larger ${displaySpeed(speed)} reserve…"
@@ -1188,19 +1242,19 @@ class BookReaderRuntime private constructor(
         }
 
     private fun initialListeningBufferMs(speed: Float): Long = when {
-        speed >= 2.0f -> 120_000L
-        speed >= 1.75f -> 90_000L
-        speed >= 1.5f -> 60_000L
-        speed >= 1.25f -> 30_000L
-        else -> 12_000L
+        speed >= 2.0f -> 150_000L
+        speed >= 1.75f -> 120_000L
+        speed >= 1.5f -> 90_000L
+        speed >= 1.25f -> 45_000L
+        else -> 20_000L
     }
 
     private fun targetListeningBufferMs(speed: Float): Long = when {
-        speed >= 2.0f -> 300_000L
-        speed >= 1.75f -> 240_000L
-        speed >= 1.5f -> 180_000L
-        speed >= 1.25f -> 90_000L
-        else -> 45_000L
+        speed >= 2.0f -> 360_000L
+        speed >= 1.75f -> 300_000L
+        speed >= 1.5f -> 240_000L
+        speed >= 1.25f -> 150_000L
+        else -> 90_000L
     }
 
     private fun displaySpeed(speed: Float): String =

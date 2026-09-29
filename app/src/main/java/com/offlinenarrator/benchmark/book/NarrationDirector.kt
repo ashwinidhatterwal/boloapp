@@ -3,12 +3,10 @@ package com.offlinenarrator.benchmark.book
 import java.util.Locale
 
 /**
- * Conservative deterministic narration director.
+ * Natural Narrator v2.
  *
- * v2 keeps sentence boundaries intact and never batches unrelated sentences
- * into one TTS request. Dialogue is separated from narration only at quote
- * boundaries; explicit speaker attribution is required before a character
- * voice is assigned.
+ * Sentence-level source locations are kept for seeking/highlighting while the
+ * spoken copy preserves author punctuation and book structure for Kokoro.
  */
 object NarrationDirector {
     private const val CONTEXT_CHARS = 180
@@ -43,6 +41,7 @@ object NarrationDirector {
         chapterText: String,
         startWord: Long = 0L,
         checkpoints: List<WordCheckpoint> = emptyList(),
+        sourceFormat: String = "EPUB",
     ): List<NarrationUnit> {
         val remaining = dropWords(
             text = chapterText,
@@ -55,6 +54,10 @@ object NarrationDirector {
 
         if (remaining.isBlank()) return emptyList()
 
+        val singleNewlineIsParagraph =
+            sourceFormat.equals("EPUB", true) ||
+                sourceFormat.equals("HTML", true)
+
         val spans = splitQuotedSpans(remaining)
         val rawUnits = mutableListOf<RawUnit>()
 
@@ -63,16 +66,60 @@ object NarrationDirector {
                 inferSpeaker(span.beforeContext, span.afterContext)
             } else null
 
-            for (slice in SentenceSegmenter.split(span.text)) {
+            val slices = SentenceSegmenter.split(
+                span.text,
+                singleNewlineIsParagraph = singleNewlineIsParagraph,
+            )
+
+            for (slice in slices) {
                 if (slice.text.isBlank()) continue
+
+                if (NarrationTextNormalizer.isSceneMarker(slice.text)) {
+                    if (rawUnits.isNotEmpty()) {
+                        val previous = rawUnits.last()
+                        rawUnits[rawUnits.lastIndex] = previous.copy(
+                            boundaryAfter = NarrationBoundary.SCENE,
+                        )
+                    }
+                    // Keep location width but never pronounce "asterisk asterisk".
+                    rawUnits += RawUnit(
+                        text = slice.text,
+                        spokenText = "",
+                        role = NarrationRole.NARRATOR,
+                        speakerKey = null,
+                        deliveryCue = DeliveryCue.NEUTRAL,
+                        boundaryAfter = NarrationBoundary.SCENE,
+                    )
+                    continue
+                }
+
+                val sourceText = slice.text
+                val speechSource = if (span.dialogue) {
+                    wrapDialogueForSpeech(sourceText)
+                } else {
+                    sourceText
+                }
+
                 rawUnits += RawUnit(
-                    text = slice.text,
+                    text = sourceText,
+                    spokenText = NarrationTextNormalizer.normalize(speechSource),
                     role = if (span.dialogue) NarrationRole.DIALOGUE else NarrationRole.NARRATOR,
                     speakerKey = speaker,
-                    deliveryCue = deliveryCue(slice.text),
-                    pauseAfterMs = pauseAfterMs(slice.text, slice.paragraphBreakAfter),
+                    deliveryCue = deliveryCue(sourceText),
+                    boundaryAfter = if (slice.paragraphBreakAfter) {
+                        NarrationBoundary.PARAGRAPH
+                    } else {
+                        NarrationBoundary.SENTENCE
+                    },
                 )
             }
+        }
+
+        if (rawUnits.isNotEmpty()) {
+            val last = rawUnits.last()
+            rawUnits[rawUnits.lastIndex] = last.copy(
+                boundaryAfter = NarrationBoundary.CHAPTER,
+            )
         }
 
         var nextWord = startWord
@@ -83,14 +130,25 @@ object NarrationDirector {
             } else {
                 NarrationUnit(
                     text = raw.text,
+                    spokenText = raw.spokenText,
                     startWord = nextWord,
                     wordCount = words,
                     role = raw.role,
                     speakerKey = raw.speakerKey,
                     deliveryCue = raw.deliveryCue,
-                    pauseAfterMs = raw.pauseAfterMs,
+                    boundaryAfter = raw.boundaryAfter,
+                    pauseAfterMs = 0,
                 ).also { nextWord += words }
             }
+        }
+    }
+
+    private fun wrapDialogueForSpeech(text: String): String {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return trimmed
+        return when {
+            trimmed.startsWith("“") || trimmed.startsWith("\"") -> trimmed
+            else -> "“$trimmed”"
         }
     }
 
@@ -111,16 +169,11 @@ object NarrationDirector {
 
             val close = findClosingQuote(text, open + 1, text[open])
             if (close < 0) {
-                // An unmatched quote is safer as narrator text than swallowing
-                // the rest of a chapter into a fabricated dialogue voice.
                 addSpan(out, text.substring(open), false, text, open, text.length)
                 break
             }
 
             var sourceEnd = close + 1
-            // Some books put commas/periods outside the closing quote. Attach
-            // them to the dialogue span so punctuation never becomes a
-            // standalone "word" and location offsets remain stable.
             while (sourceEnd < text.length && text[sourceEnd] in OUTSIDE_QUOTE_PUNCTUATION) {
                 sourceEnd += 1
             }
@@ -210,23 +263,19 @@ object NarrationDirector {
     }
 
     private fun deliveryCue(text: String): DeliveryCue {
+        val trimmed = text.trimEnd()
+        if (trimmed.endsWith("…") || trimmed.endsWith("...")) {
+            return DeliveryCue.HESITATION
+        }
+        if (trimmed.endsWith("—") || trimmed.endsWith("–")) {
+            return DeliveryCue.INTERRUPTION
+        }
+
         return when (lastMeaningfulPunctuation(text)) {
             '?', '？' -> DeliveryCue.QUESTION
             '!', '！' -> DeliveryCue.EXCLAMATION
             else -> DeliveryCue.NEUTRAL
         }
-    }
-
-    private fun pauseAfterMs(text: String, paragraphBreak: Boolean): Int {
-        val base = when (lastMeaningfulPunctuation(text)) {
-            '?', '!', '？', '！' -> 260
-            '.', '…', '।', '॥', '。' -> 220
-            ';', ':' -> 150
-            ',' -> 105
-            '—', '–' -> 125
-            else -> 155
-        }
-        return if (paragraphBreak) maxOf(base, 310) else base
     }
 
     private fun lastMeaningfulPunctuation(text: String): Char? {
@@ -247,10 +296,11 @@ object NarrationDirector {
 
     private data class RawUnit(
         val text: String,
+        val spokenText: String,
         val role: NarrationRole,
         val speakerKey: String?,
         val deliveryCue: DeliveryCue,
-        val pauseAfterMs: Int,
+        val boundaryAfter: NarrationBoundary,
     )
 
     private val OUTSIDE_QUOTE_PUNCTUATION = charArrayOf(',', '.', ';', ':', '?', '!')

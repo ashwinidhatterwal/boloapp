@@ -20,9 +20,9 @@ class NarrationPrecisionTest {
         val text = "Wait.\nReally?\nEnough!\nDone."
         val units = NarrationDirector.plan(text)
         assertEquals(4, units.size)
-        assertTrue(units[1].pauseAfterMs >= 250)
-        assertTrue(units[2].pauseAfterMs >= 250)
-        assertTrue(units[3].pauseAfterMs >= 200)
+        assertEquals(DeliveryCue.QUESTION, units[1].deliveryCue)
+        assertEquals(DeliveryCue.EXCLAMATION, units[2].deliveryCue)
+        assertEquals(NarrationBoundary.CHAPTER, units[3].boundaryAfter)
     }
 
     @Test

@@ -87,7 +87,7 @@ class NarrationCache(context: Context) {
         text: String,
     ): String {
         val payload = buildString {
-            append("kokoro-reader-v2-precision\n")
+            append("kokoro-reader-v3-natural-narrator\n")
             append(modelSha)
             append('\n')
             append(voiceId)

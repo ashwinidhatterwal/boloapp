@@ -20,12 +20,20 @@ object SentenceSegmenter {
         "gen", "rep", "sen", "gov", "pres", "capt", "lt", "col", "sgt",
     )
 
+
+    private val titleAbbreviations = setOf(
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "capt", "lt", "col", "sgt",
+    )
+
     data class Slice(
         val text: String,
         val paragraphBreakAfter: Boolean,
     )
 
-    fun split(text: String): List<Slice> {
+    fun split(
+        text: String,
+        singleNewlineIsParagraph: Boolean = false,
+    ): List<Slice> {
         if (text.isBlank()) return emptyList()
 
         val source = text
@@ -70,7 +78,11 @@ object SentenceSegmenter {
                 if (isSentenceBoundary(source, i, terminalEnd)) {
                     emit(
                         terminalEnd,
-                        paragraphBreak = hasNewlineBeforeNextText(source, terminalEnd),
+                        paragraphBreak = hasParagraphBreakBeforeNextText(
+                            source,
+                            terminalEnd,
+                            singleNewlineIsParagraph,
+                        ),
                     )
                     start = skipBoundaryWhitespace(source, terminalEnd)
                     i = start
@@ -90,12 +102,15 @@ object SentenceSegmenter {
         return out
     }
 
-    fun readerLines(text: String): List<ReaderLine> {
+    fun readerLines(
+        text: String,
+        singleNewlineIsParagraph: Boolean = false,
+    ): List<ReaderLine> {
         var wordOffset = 0L
         var index = 0
         val lines = mutableListOf<ReaderLine>()
 
-        for (slice in split(text)) {
+        for (slice in split(text, singleNewlineIsParagraph)) {
             val words = countWords(slice.text)
             if (words <= 0L) continue
             lines += ReaderLine(
@@ -133,12 +148,20 @@ object SentenceSegmenter {
         return looksStandalone
     }
 
-    private fun hasNewlineBeforeNextText(text: String, from: Int): Boolean {
+    private fun hasParagraphBreakBeforeNextText(
+        text: String,
+        from: Int,
+        singleNewlineIsParagraph: Boolean,
+    ): Boolean {
+        var newlineCount = 0
         for (i in from until text.length) {
-            if (text[i] == '\n') return true
-            if (!text[i].isWhitespace()) return false
+            if (text[i] == '\n') {
+                newlineCount += 1
+                continue
+            }
+            if (!text[i].isWhitespace()) break
         }
-        return false
+        return newlineCount >= 2 || (singleNewlineIsParagraph && newlineCount >= 1)
     }
 
     private fun isSentenceBoundary(
@@ -180,7 +203,15 @@ object SentenceSegmenter {
         if (token.isBlank()) return false
 
         val normalized = token.lowercase(Locale.ROOT).trimEnd('.')
-        if (normalized in abbreviations) return true
+        if (normalized in abbreviations) {
+            val next = nextNonWhitespaceIndex(text, index + 1)
+            if (next < 0) return false
+            if (normalized in titleAbbreviations) {
+                return text[next].isUpperCase()
+            }
+            if (normalized == "e.g" || normalized == "i.e") return true
+            return text[next].isLowerCase()
+        }
 
         // Initials: J. K. Rowling, A. P. J. Abdul Kalam.
         if (normalized.length == 1 && normalized[0].isLetter()) {

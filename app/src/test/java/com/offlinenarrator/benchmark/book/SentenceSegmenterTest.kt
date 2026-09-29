@@ -37,6 +37,16 @@ class SentenceSegmenterTest {
     }
 
     @Test
+    fun epubSingleNewlineCanRepresentParagraphBoundary() {
+        val slices = SentenceSegmenter.split(
+            "First paragraph.\nSecond paragraph.",
+            singleNewlineIsParagraph = true,
+        )
+        assertEquals(2, slices.size)
+        assertTrue(slices[0].paragraphBreakAfter)
+    }
+
+    @Test
     fun readerLineOffsetsRemainMonotonic() {
         val text = "First sentence. Second sentence? Third sentence!"
         val lines = SentenceSegmenter.readerLines(text)

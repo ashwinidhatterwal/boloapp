@@ -1,9 +1,12 @@
 # Bolo
 
-Current checkpoint: **v0.22 Reader Precision + Polished Player**
+Current checkpoint: **v0.23 Natural Narrator**
 
-Bolo is a Kokoro-powered offline document/audiobook reader with EPUB, PDF, DOCX, TXT and HTML import, huge-book indexing, selectable chapter text, direct sentence playback, persistent narrator voices, background Media3 playback and punctuation-aware natural pauses.
+Offline long-form reader with multi-format import, huge-book indexing, chapter
+and tappable-line navigation, background playback, punctuation-preserving
+Kokoro narration, semantic batching, measured boundary pacing and subtle
+character performance.
 
-Artifact: `bolo-v0.22-reader-precision-player`
+GitHub artifact: `bolo-v0.23-natural-narrator`
 
-See `BOLO_V0.22_CHECKPOINT.md`.
+See `BOLO_V0.23_CHECKPOINT.md`.

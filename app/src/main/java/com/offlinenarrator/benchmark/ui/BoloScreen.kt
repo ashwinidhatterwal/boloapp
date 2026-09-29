@@ -1310,7 +1310,7 @@ private fun ReaderDetailsCard(
             }
 
             Text(
-                "Narration Director V1 separates quoted dialogue and only assigns a character voice when an explicit nearby speaker attribution is detected.",
+                "Natural Narrator v2 preserves author punctuation, batches compatible sentences for context, normalizes the real audio silence at boundaries, and uses subtle character variation only when the speaker is explicit.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

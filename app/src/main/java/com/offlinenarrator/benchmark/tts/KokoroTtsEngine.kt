@@ -45,7 +45,21 @@ class KokoroTtsEngine(
         check(request.text.isNotBlank()) { "Text is empty" }
 
         request.voiceId?.let { requested ->
-            KokoroTTS.getAvailableVoices().firstOrNull { it.id == requested }?.let(KokoroTTS::setVoice)
+            val blend = parseBlendVoiceId(requested)
+            if (blend != null) {
+                val voices = KokoroTTS.getAvailableVoices()
+                val base = voices.firstOrNull { it.id == blend.baseVoiceId }
+                val accent = voices.firstOrNull { it.id == blend.accentVoiceId }
+                if (base != null && accent != null) {
+                    KokoroTTS.setVoiceBlend(base, accent, blend.accentWeight)
+                } else {
+                    base?.let(KokoroTTS::setVoice)
+                }
+            } else {
+                KokoroTTS.getAvailableVoices()
+                    .firstOrNull { it.id == requested }
+                    ?.let(KokoroTTS::setVoice)
+            }
         }
 
         val started = System.nanoTime()
@@ -66,6 +80,34 @@ class KokoroTtsEngine(
             sampleRate = result.sampleRate,
         )
     }
+
+    fun subtleCharacterVoiceId(
+        narratorVoiceId: String,
+        characterVoiceId: String,
+        accentWeight: Float = 0.14f,
+    ): String {
+        if (narratorVoiceId == characterVoiceId) return narratorVoiceId
+        val percent = (accentWeight.coerceIn(0.05f, 0.30f) * 100f).toInt()
+        return "blend:$narratorVoiceId:$characterVoiceId:$percent"
+    }
+
+    private fun parseBlendVoiceId(value: String): BlendVoice? {
+        if (!value.startsWith("blend:")) return null
+        val parts = value.split(':')
+        if (parts.size != 4) return null
+        val weight = parts[3].toIntOrNull()?.div(100f) ?: return null
+        return BlendVoice(
+            baseVoiceId = parts[1],
+            accentVoiceId = parts[2],
+            accentWeight = weight.coerceIn(0.05f, 0.30f),
+        )
+    }
+
+    private data class BlendVoice(
+        val baseVoiceId: String,
+        val accentVoiceId: String,
+        val accentWeight: Float,
+    )
 
     override fun release() {
         ready = false

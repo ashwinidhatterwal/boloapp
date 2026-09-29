@@ -413,3 +413,222 @@ new_voice_block = """        val AF_HEART = KokoroVoice(
 if old_voice_block not in voice_code:
     raise SystemExit("Expected KokoroVoice block not found")
 voice_src.write_text(voice_code.replace(old_voice_block, new_voice_block, 1))
+
+# -------------------------------------------------------------------------
+# Natural Narrator v2: preserve author punctuation through espeak G2P.
+# -------------------------------------------------------------------------
+tts_src = Path("library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt")
+tts_code = tts_src.read_text()
+
+tts_code = tts_code.replace(
+    "val phonemes = KokoroJNI.nativePhonemize(chunk)",
+    "val phonemes = phonemizePreservingPunctuation(chunk)",
+)
+tts_code = tts_code.replace(
+    "val phonemes = KokoroJNI.nativePhonemize(text)\n        return KokoroVocab.encode(phonemes).size",
+    "val phonemes = phonemizePreservingPunctuation(text)\n        return KokoroVocab.encode(phonemes).size",
+)
+
+helper_marker = '''    /**
+     * Split arbitrary text into model-safe pieces using the same phoneme/token
+     * pipeline that will actually feed ONNX.
+     */
+    private fun chunkTextForModel(text: String): List<String> {
+'''
+
+punctuation_helper = r'''    private fun phonemizePreservingPunctuation(text: String): String {
+        if (text.isBlank()) return ""
+
+        val normalized = text
+            .replace("...", "…")
+            .replace('–', '—')
+            .replace('―', '—')
+
+        val out = StringBuilder()
+        var lexicalStart = 0
+
+        fun appendLexical(endExclusive: Int) {
+            if (endExclusive <= lexicalStart) return
+            val value = normalized.substring(lexicalStart, endExclusive)
+            if (value.isBlank()) {
+                if (out.isNotEmpty() && out.last() != ' ') out.append(' ')
+                return
+            }
+
+            val phonemes = KokoroJNI.nativePhonemize(value).trim()
+            if (phonemes.isNotBlank()) {
+                if (
+                    out.isNotEmpty() &&
+                    out.last() != ' ' &&
+                    out.last() !in OPENING_PUNCTUATION
+                ) {
+                    out.append(' ')
+                }
+                out.append(phonemes)
+            }
+        }
+
+        var i = 0
+        while (i < normalized.length) {
+            val ch = normalized[i]
+            if (isPreservedPunctuation(normalized, i)) {
+                appendLexical(i)
+
+                while (out.isNotEmpty() && out.last() == ' ') {
+                    out.setLength(out.length - 1)
+                }
+
+                out.append(ch)
+                if (ch !in OPENING_PUNCTUATION) out.append(' ')
+                lexicalStart = i + 1
+            }
+            i += 1
+        }
+
+        appendLexical(normalized.length)
+        return out.toString()
+            .replace(Regex(" +"), " ")
+            .trim()
+    }
+
+    private fun isPreservedPunctuation(text: String, index: Int): Boolean {
+        val ch = text[index]
+        if (ch !in PRESERVED_PUNCTUATION) return false
+
+        if (ch == ',') {
+            val prev = text.getOrNull(index - 1)
+            val next = text.getOrNull(index + 1)
+            if (prev?.isDigit() == true && next?.isDigit() == true) return false
+        }
+
+        if (ch == ':') {
+            val prev = text.getOrNull(index - 1)
+            val next = text.getOrNull(index + 1)
+            if (prev?.isDigit() == true && next?.isDigit() == true) return false
+        }
+
+        if (ch == '.') {
+            if (isDecimalPoint(text, index) || isProtectedPeriod(text, index)) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private fun isDecimalPoint(text: String, index: Int): Boolean =
+        index > 0 &&
+            index + 1 < text.length &&
+            text[index - 1].isDigit() &&
+            text[index + 1].isDigit()
+
+    private fun isProtectedPeriod(text: String, index: Int): Boolean {
+        var start = index - 1
+        while (start >= 0 && (text[start].isLetter() || text[start] == '.')) {
+            start -= 1
+        }
+        val token = text.substring(start + 1, index)
+        val normalized = token.lowercase()
+        if (normalized in G2P_ABBREVIATIONS) return true
+
+        if (normalized.length == 1 && normalized.firstOrNull()?.isLetter() == true) {
+            val next = text.drop(index + 1).firstOrNull { !it.isWhitespace() }
+            if (next?.isUpperCase() == true) return true
+        }
+
+        val tailStart = (index - 12).coerceAtLeast(0)
+        val tail = text.substring(tailStart, index + 1)
+        if (Regex("(?:[A-Za-z]\\.){2,}$").containsMatchIn(tail)) return true
+
+        return false
+    }
+
+    private val PRESERVED_PUNCTUATION =
+        setOf(';', ':', ',', '.', '!', '?', '—', '…', '“', '”', '«', '»', '"')
+
+    private val OPENING_PUNCTUATION =
+        setOf('“', '«', '"')
+
+    private val G2P_ABBREVIATIONS = setOf(
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs",
+        "etc", "e.g", "i.e", "approx", "dept", "fig", "vol", "ch",
+        "pp", "p", "no", "nos", "inc", "ltd", "co", "mt",
+    )
+
+'''
+
+if helper_marker not in tts_code:
+    raise SystemExit("Natural Narrator punctuation helper marker not found")
+tts_code = tts_code.replace(helper_marker, punctuation_helper + helper_marker, 1)
+
+# -------------------------------------------------------------------------
+# Subtle character voice blending.
+# -------------------------------------------------------------------------
+voice_field = "    private var voice: KokoroVoice = KokoroVoice.AF_HEART\n"
+if voice_field not in tts_code:
+    raise SystemExit("Kokoro voice field not found")
+tts_code = tts_code.replace(
+    voice_field,
+    voice_field + "    private var activeVoicePackId: String = KokoroVoice.AF_HEART.id\n",
+    1,
+)
+
+tts_code = tts_code.replace(
+    '''        this@KokoroTTS.voice = voice
+        loadVoicepack(ctx, voice.id)
+''',
+    '''        this@KokoroTTS.voice = voice
+        loadVoicepack(ctx, voice.id)
+        activeVoicePackId = voice.id
+''',
+    1,
+)
+
+old_set_voice = '''    fun setVoice(voice: KokoroVoice) {
+        this.voice = voice
+        KokoroJNI.nativeSetVoice(voice.espeakLang)
+        appContext?.let { loadVoicepack(it, voice.id) }
+    }
+'''
+new_set_voice = '''    fun setVoice(voice: KokoroVoice) {
+        this.voice = voice
+        KokoroJNI.nativeSetVoice(voice.espeakLang)
+        appContext?.let { loadVoicepack(it, voice.id) }
+        activeVoicePackId = voice.id
+    }
+
+    fun setVoiceBlend(
+        base: KokoroVoice,
+        accent: KokoroVoice,
+        accentWeight: Float = 0.14f,
+    ) {
+        val ctx = appContext ?: throw KokoroException.NotInitialized()
+        loadVoicepack(ctx, base.id)
+        loadVoicepack(ctx, accent.id)
+
+        val basePack = voicepacks[base.id] ?: throw KokoroException.VoiceNotFound(base.id)
+        val accentPack = voicepacks[accent.id] ?: throw KokoroException.VoiceNotFound(accent.id)
+        val size = minOf(basePack.size, accentPack.size)
+        if (size <= 0) throw KokoroException.VoiceNotFound(accent.id)
+
+        val w = accentWeight.coerceIn(0.05f, 0.30f)
+        val blendId = "blend:${base.id}:${accent.id}:${(w * 100f).toInt()}"
+        voicepacks[blendId] ?: FloatArray(size) { index ->
+            basePack[index] * (1f - w) + accentPack[index] * w
+        }.also { voicepacks[blendId] = it }
+
+        this.voice = base
+        KokoroJNI.nativeSetVoice(base.espeakLang)
+        activeVoicePackId = blendId
+    }
+'''
+if old_set_voice not in tts_code:
+    raise SystemExit("Kokoro setVoice block not found")
+tts_code = tts_code.replace(old_set_voice, new_set_voice, 1)
+
+tts_code = tts_code.replace(
+    "val style = styleFor(voice.id, tokens.size)",
+    "val style = styleFor(activeVoicePackId, tokens.size)",
+)
+
+tts_src.write_text(tts_code)

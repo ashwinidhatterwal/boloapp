@@ -1103,7 +1103,17 @@ class DocumentBookStore(
         var eventsSeen = 0
 
         fun appendBoundary() {
-            if (text.isNotEmpty() && text.last() != '\n') {
+            if (text.isEmpty()) return
+            while (text.isNotEmpty() && text.last() == ' ') {
+                text.setLength(text.length - 1)
+            }
+            var trailingNewlines = 0
+            var cursor = text.length - 1
+            while (cursor >= 0 && text[cursor] == '\n') {
+                trailingNewlines += 1
+                cursor -= 1
+            }
+            repeat((2 - trailingNewlines).coerceAtLeast(0)) {
                 text.append('\n')
             }
         }

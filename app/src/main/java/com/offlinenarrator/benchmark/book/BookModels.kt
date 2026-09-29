@@ -178,16 +178,42 @@ enum class DeliveryCue {
     NEUTRAL,
     QUESTION,
     EXCLAMATION,
+    HESITATION,
+    INTERRUPTION,
+}
+
+enum class NarrationBoundary {
+    CONTINUE,
+    SENTENCE,
+    PARAGRAPH,
+    SCENE,
+    CHAPTER,
 }
 
 data class NarrationUnit(
+    /** Source text used for exact word/location accounting. */
     val text: String,
+    /** Text actually sent to the TTS front-end after conservative normalization. */
+    val spokenText: String = text,
     val startWord: Long,
     val wordCount: Long,
     val role: NarrationRole = NarrationRole.NARRATOR,
     val speakerKey: String? = null,
     val deliveryCue: DeliveryCue = DeliveryCue.NEUTRAL,
-    val pauseAfterMs: Int = 180,
+    val boundaryAfter: NarrationBoundary = NarrationBoundary.SENTENCE,
+    /** Compatibility/diagnostic only; v0.23 no longer blindly appends it. */
+    val pauseAfterMs: Int = 0,
+)
+
+data class NarrationBatch(
+    val text: String,
+    val startWord: Long,
+    val wordCount: Long,
+    val role: NarrationRole,
+    val speakerKey: String?,
+    val deliveryCue: DeliveryCue,
+    val boundaryAfter: NarrationBoundary,
+    val unitCount: Int,
 )
 
 /**
