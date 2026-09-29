@@ -131,8 +131,8 @@ class PocketTtsEngine(
                 }
             }
 
-            override fun onAudioAvailable(id: String?, audio: ByteArray?) {
-                if (id == utteranceId && !audio.isNullOrEmpty()) {
+            override fun onAudioAvailable(id: String?, audio: ByteArray) {
+                if (id == utteranceId && audio.isNotEmpty()) {
                     firstAudioMs.compareAndSet(-1L, SystemClock.elapsedRealtime())
                     lastStage.set("audio is streaming; waiting for completion")
                 }

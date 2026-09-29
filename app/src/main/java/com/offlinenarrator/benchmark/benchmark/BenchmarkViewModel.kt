@@ -231,6 +231,10 @@ class BenchmarkViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun choosePocketDiagnostic() {
+        _state.update { it.copy(text = BenchmarkPassages.pocketDiagnostic) }
+    }
+
     fun synthesize() {
         val snapshot = _state.value
         val active = engine ?: return
