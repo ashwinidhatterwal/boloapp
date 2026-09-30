@@ -1213,8 +1213,9 @@ private fun ReaderDetailsCard(
             Text("Reader details", fontWeight = FontWeight.Bold)
             Metric("Generated this session", state.generatedSegments.toString())
             Metric("Dialogue segments", state.dialogueSegments.toString())
-            Metric("Characters voiced", state.charactersVoiced.toString())
+            Metric("Characters identified", state.charactersVoiced.toString())
             Metric("Cached segments reused", state.cacheHits.toString())
+            Metric("Automatic QC retries", state.qcRetries.toString())
             state.meanGenerationRtf?.let {
                 Metric(
                     "Mean generation RTF",
@@ -1235,13 +1236,13 @@ private fun ReaderDetailsCard(
             }
 
             Text(
-                "Natural Narrator v3 plans by real Kokoro token count, preserves paragraph context, trims excessive leading silence, normalizes structural pauses, tracks sentence valleys inside batched audio, and keeps character variation subtle.",
+                "Audiobook Compiler v1 analyses the chapter first, feeds Kokoro quality-range chunks, keeps uncertain emotion neutral, automatically retries suspicious audio, and finishes synthesis before playback begins.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-                "Playback lives in Android's MediaSessionService, so lock-screen, notification and headset play/pause controls can keep working while the screen is off.",
+                "While prepared audio is playing, Kokoro is idle. Playback lives in Android's MediaSessionService, so lock-screen, notification and headset controls remain available without continuous neural generation.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1281,7 +1282,7 @@ private fun Metric(
 private fun playerStateLabel(state: BoloUiState): String = when {
     state.finished -> "FINISHED"
     state.thermalPaused -> "COOLING"
-    state.readerStarted && !state.playbackStarted -> "PREPARING"
+    state.readerStarted && !state.playbackStarted -> "COMPILING"
     state.isPlaying -> "NOW PLAYING"
     state.isPaused -> "PAUSED"
     else -> "READY TO READ"

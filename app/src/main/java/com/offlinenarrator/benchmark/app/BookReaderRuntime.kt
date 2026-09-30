@@ -2,6 +2,7 @@ package com.offlinenarrator.benchmark.app
 
 import android.content.Context
 import android.net.Uri
+import com.offlinenarrator.benchmark.book.AudiobookNarrationCompiler
 import com.offlinenarrator.benchmark.book.BookLocation
 import com.offlinenarrator.benchmark.book.BookProgress
 import com.offlinenarrator.benchmark.book.BookRecord
@@ -22,6 +23,7 @@ import com.offlinenarrator.benchmark.model.KokoroModelStore
 import com.offlinenarrator.benchmark.playback.BackgroundAudioController
 import com.offlinenarrator.benchmark.reader.NarrationCache
 import com.offlinenarrator.benchmark.reader.WavAudioFinisher
+import com.offlinenarrator.benchmark.reader.WavQualityInspector
 import com.offlinenarrator.benchmark.tts.KokoroTtsEngine
 import com.offlinenarrator.benchmark.tts.SpeechRequest
 import com.offlinenarrator.benchmark.tts.TtsVoice
@@ -89,6 +91,7 @@ data class BoloUiState(
     val charactersVoiced: Int = 0,
     val cacheHits: Int = 0,
     val meanGenerationRtf: Double? = null,
+    val qcRetries: Int = 0,
     val underruns: Int = 0,
     val thermalPaused: Boolean = false,
     val cacheBytes: Long = 0L,
@@ -723,6 +726,7 @@ class BookReaderRuntime private constructor(
                 charactersVoiced = 0,
                 cacheHits = 0,
                 meanGenerationRtf = null,
+                qcRetries = 0,
                 underruns = 0,
                 thermalPaused = false,
             )
@@ -737,11 +741,14 @@ class BookReaderRuntime private constructor(
             var generationMs = 0L
             var generatedSegments = 0
             var dialogueSegments = 0
+            var qcRetries = 0
             val characterNames = linkedSetOf<String>()
             var firstSeekPending = initialSeekMs.coerceAtLeast(0L)
 
             try {
-                for (chapterIndex in start.chapterIndex..book.chapters.lastIndex) {
+                // Prepare-ahead architecture: compile the selected chapter fully,
+                // then stop neural synthesis before playback begins.
+                for (chapterIndex in start.chapterIndex..start.chapterIndex) {
                     ensureActive()
 
                     val chapter = book.chapters[chapterIndex]
@@ -752,57 +759,28 @@ class BookReaderRuntime private constructor(
                         0L
                     }
 
-                    val units = withContext(Dispatchers.Default) {
-                        NarrationDirector.plan(
+                    val chapterPlan = withContext(Dispatchers.Default) {
+                        AudiobookNarrationCompiler.planChapter(
                             chapterText = chapterText,
                             startWord = chapterStartWord,
                             checkpoints = chapter.checkpoints,
                             sourceFormat = book.format,
-                        )
-                    }
-                    val batches = withContext(Dispatchers.Default) {
-                        NarrationBatcher.batch(
-                            units = units,
                             tokenCounter = engine::countModelTokens,
                         )
                     }
+                    val batches = chapterPlan.batches
 
                     for ((batchIndex, batch) in batches.withIndex()) {
                         ensureActive()
 
-                        while (
-                            player.started &&
-                            player.bufferedListeningMs() >=
-                                targetListeningBufferMs(_state.value.playbackSpeed)
-                        ) {
-                            delay(400L)
-                            ensureActive()
-                        }
-
                         awaitThermalHeadroom()
 
-                        val unitVoiceId = if (
-                            batch.role == NarrationRole.DIALOGUE &&
-                            batch.speakerKey != null
-                        ) {
-                            characterNames += batch.speakerKey
-                            val accentVoiceId = characterVoiceStore.voiceFor(
-                                bookId = book.id,
-                                speakerKey = batch.speakerKey,
-                                narratorVoiceId = voiceId,
-                                availableVoices = _state.value.voices,
-                            )
-                            engine.subtleCharacterVoiceId(
-                                narratorVoiceId = voiceId,
-                                characterVoiceId = accentVoiceId,
-                            )
-                        } else {
-                            voiceId
-                        }
-
-                        if (batch.role == NarrationRole.DIALOGUE) {
-                            dialogueSegments += batch.unitCount
-                        }
+                        // Professional audiobook default: one consistent narrator.
+                        // Character identity is tracked for dialogue continuity, but
+                        // we do not mutate Kokoro's timbre from line to line.
+                        batch.speakerKey?.let(characterNames::add)
+                        val unitVoiceId = voiceId
+                        dialogueSegments += batch.dialogueUnitCount
 
                         val effectiveBoundary = effectiveBoundaryFor(
                             book = book,
@@ -826,6 +804,12 @@ class BookReaderRuntime private constructor(
                             append(prosody.cadence.name)
                             append(':')
                             append(prosody.synthesisSpeed)
+                            append("\u0000mood=")
+                            append(batch.performance.mood.name)
+                            append(':')
+                            append(batch.performance.confidence)
+                            append("\u0000tokens=")
+                            append(batch.modelTokenCount ?: -1)
                         }
                         val cached = cache.get(
                             modelSha = modelSha,
@@ -861,27 +845,93 @@ class BookReaderRuntime private constructor(
                                     ?: IllegalStateException("Narration synthesis failed.")
                             }
 
-                            val result = synthesized.getOrThrow()
-                            val boundaryResult = withContext(Dispatchers.IO) {
+                            val first = synthesized.getOrThrow()
+                            val firstBoundary = withContext(Dispatchers.IO) {
                                 WavAudioFinisher.normalizeBoundarySilence(
-                                    file = result.audioFile,
+                                    file = first.audioFile,
                                     minTrailingMs = timing.minMs,
                                     targetTrailingMs = timing.targetMs,
                                     maxTrailingMs = timing.maxMs,
                                 )
                             }
-                            val finishedDurationMs =
-                                (result.audioDurationMs + boundaryResult.durationAdjustmentMs)
+                            val firstDuration =
+                                (first.audioDurationMs + firstBoundary.durationAdjustmentMs)
                                     .coerceAtLeast(1L)
-                            generationMs += result.generationTimeMs
-                            generatedAudioMs += finishedDurationMs
+                            var chosen = first
+                            var chosenDuration = firstDuration
+                            var chosenQc = withContext(Dispatchers.IO) {
+                                WavQualityInspector.inspect(
+                                    file = first.audioFile,
+                                    wordCount = batch.wordCount,
+                                    allowLongPause = effectiveBoundary >= NarrationBoundary.PARAGRAPH,
+                                )
+                            }
+                            generationMs += first.generationTimeMs
 
+                            // Prepare-ahead gives us time to repair suspicious output
+                            // before the listener ever hears it. One conservative retry
+                            // avoids endless generation loops.
+                            if (!chosenQc.acceptable) {
+                                qcRetries += 1
+                                val retryResult = try {
+                                    withTimeout(SEGMENT_TIMEOUT_MS) {
+                                        synthesisMutex.withLock {
+                                            ensureActive()
+                                            engine.synthesize(
+                                                SpeechRequest(
+                                                    text = batch.text,
+                                                    speed = 1.0f,
+                                                    voiceId = unitVoiceId,
+                                                )
+                                            )
+                                        }
+                                    }
+                                } catch (_: TimeoutCancellationException) {
+                                    Result.failure(
+                                        IllegalStateException("QC retry timed out.")
+                                    )
+                                }
+                                val retry = retryResult.getOrNull()
+
+                                if (retry != null) {
+                                    val retryBoundary = withContext(Dispatchers.IO) {
+                                        WavAudioFinisher.normalizeBoundarySilence(
+                                            file = retry.audioFile,
+                                            minTrailingMs = timing.minMs,
+                                            targetTrailingMs = timing.targetMs,
+                                            maxTrailingMs = timing.maxMs,
+                                        )
+                                    }
+                                    val retryDuration =
+                                        (retry.audioDurationMs + retryBoundary.durationAdjustmentMs)
+                                            .coerceAtLeast(1L)
+                                    val retryQc = withContext(Dispatchers.IO) {
+                                        WavQualityInspector.inspect(
+                                            file = retry.audioFile,
+                                            wordCount = batch.wordCount,
+                                            allowLongPause = effectiveBoundary >= NarrationBoundary.PARAGRAPH,
+                                        )
+                                    }
+                                    generationMs += retry.generationTimeMs
+
+                                    if (retryQc.score > chosenQc.score) {
+                                        runCatching { chosen.audioFile.delete() }
+                                        chosen = retry
+                                        chosenDuration = retryDuration
+                                        chosenQc = retryQc
+                                    } else {
+                                        runCatching { retry.audioFile.delete() }
+                                    }
+                                }
+                            }
+
+                            generatedAudioMs += chosenDuration
                             cache.put(
                                 modelSha = modelSha,
                                 voiceId = unitVoiceId,
                                 text = cacheTextKey,
-                                source = result.audioFile,
-                                durationMs = finishedDurationMs,
+                                source = chosen.audioFile,
+                                durationMs = chosenDuration,
                             )
                         }
 
@@ -922,40 +972,11 @@ class BookReaderRuntime private constructor(
                                 charactersVoiced = characterNames.size,
                                 cacheHits = cacheHits,
                                 meanGenerationRtf = meanRtf,
-                                status = if (player.started) {
-                                    "Playing · preparing ahead"
-                                } else {
-                                    preparationStatus(_state.value.playbackSpeed)
-                                },
+                                qcRetries = qcRetries,
+                                status = "Compiling chapter · ${formatPreparedForStatus(player.bufferedSourceMs())} prepared",
                             )
                         }
 
-                        val isLastUnitInBook =
-                            chapterIndex == book.chapters.lastIndex &&
-                                batchIndex == batches.lastIndex
-
-                        if (
-                            !player.started &&
-                            (
-                                player.bufferedListeningMs() >=
-                                    initialListeningBufferMs(_state.value.playbackSpeed) ||
-                                    isLastUnitInBook
-                            )
-                        ) {
-                            player.start()
-                            if (firstSeekPending > 0L) {
-                                player.seekCurrent(firstSeekPending)
-                                firstSeekPending = 0L
-                            }
-
-                            _state.update {
-                                it.copy(
-                                    playbackStarted = true,
-                                    isPlaying = true,
-                                    status = "Playing · preparing ahead",
-                                )
-                            }
-                        }
                     }
                 }
 
@@ -972,8 +993,9 @@ class BookReaderRuntime private constructor(
                     it.copy(
                         playbackStarted = player.started,
                         isGenerating = false,
+                        qcRetries = qcRetries,
                         cacheBytes = cache.sizeBytes(),
-                        status = "Playing · book audio prepared to the end.",
+                        status = "Playing prepared chapter · narrator engine idle.",
                         deviceSnapshot = DeviceDiagnostics.capture(app),
                     )
                 }
@@ -1002,38 +1024,74 @@ class BookReaderRuntime private constructor(
                 saveCurrentPosition()
 
                 if (player.isEnded()) {
-                    val book = _state.value.activeBook
-                    if (book != null) {
-                        val endWord = maxOf(0L, book.totalWords - 1L)
+                    val snapshot = _state.value
+                    val book = snapshot.activeBook
+                    readerJob?.cancel()
+                    readerJob = null
+
+                    if (book != null && snapshot.currentChapterIndex < book.chapters.lastIndex) {
+                        val next = book.chapters[snapshot.currentChapterIndex + 1]
+                        val location = BookLocation(
+                            chapterIndex = next.index,
+                            wordOffset = 0L,
+                            globalWord = next.startWord,
+                        )
+                        selectedLocation = location
+                        resumePositionMs = 0L
                         bookStore.saveProgress(
                             book.id,
                             BookProgress(
-                                chapterIndex = book.chapters.lastIndex,
-                                segmentStartWord = maxOf(
-                                    0L,
-                                    book.chapters.last().wordCount - 1L,
-                                ),
+                                chapterIndex = next.index,
+                                segmentStartWord = 0L,
                                 positionMs = 0L,
-                                globalWord = endWord,
+                                globalWord = next.startWord,
                                 updatedAt = System.currentTimeMillis(),
                             ),
                         )
-                    }
-
-                    readerJob?.cancel()
-                    readerJob = null
-                    _state.update {
-                        it.copy(
-                            readerStarted = false,
-                            playbackStarted = false,
-                            isGenerating = false,
-                            isPlaying = false,
-                            isPaused = false,
-                            finished = true,
-                            bufferedListeningMs = 0L,
-                            status = "Finished.",
-                            deviceSnapshot = DeviceDiagnostics.capture(app),
-                        )
+                        player.stop()
+                        _state.update {
+                            it.copy(
+                                readerStarted = false,
+                                playbackStarted = false,
+                                isGenerating = false,
+                                isPlaying = false,
+                                isPaused = false,
+                                finished = false,
+                                bufferedListeningMs = 0L,
+                                currentGlobalWord = next.startWord,
+                                currentChapterIndex = next.index,
+                                status = "Chapter finished · press play to compile the next chapter.",
+                                deviceSnapshot = DeviceDiagnostics.capture(app),
+                            )
+                        }
+                        requestChapterLines(book, next.index)
+                    } else {
+                        if (book != null) {
+                            val endWord = maxOf(0L, book.totalWords - 1L)
+                            bookStore.saveProgress(
+                                book.id,
+                                BookProgress(
+                                    chapterIndex = book.chapters.lastIndex,
+                                    segmentStartWord = maxOf(0L, book.chapters.last().wordCount - 1L),
+                                    positionMs = 0L,
+                                    globalWord = endWord,
+                                    updatedAt = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                        _state.update {
+                            it.copy(
+                                readerStarted = false,
+                                playbackStarted = false,
+                                isGenerating = false,
+                                isPlaying = false,
+                                isPaused = false,
+                                finished = true,
+                                bufferedListeningMs = 0L,
+                                status = "Finished.",
+                                deviceSnapshot = DeviceDiagnostics.capture(app),
+                            )
+                        }
                     }
                     refreshLibrary()
                 }

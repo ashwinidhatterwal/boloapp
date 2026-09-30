@@ -29,27 +29,26 @@ class NarrationBatcherTest {
     }
 
     @Test
-    fun differentSpeakersAreNeverBatchedTogether() {
+    fun shortDialogueCanShareContextWithAttribution() {
         val units = NarrationDirector.plan(
             "\"Wait.\" Maya said. \"No.\" Arjun replied."
         )
-        val dialogue = NarrationBatcher.batch(units)
-            .filter { it.role == NarrationRole.DIALOGUE }
+        val batches = NarrationBatcher.batch(units)
 
-        assertTrue(dialogue.size >= 2)
-        assertTrue(dialogue.zipWithNext().all { (a, b) ->
-            a.speakerKey != b.speakerKey || a.speakerKey == null
-        })
+        assertTrue(batches.isNotEmpty())
+        assertTrue(batches.sumOf { it.dialogueUnitCount } >= 2)
+        assertTrue(batches.any { it.unitCount >= 2 })
     }
+
     @Test
-    fun exactTokenBudgetStopsBatchBeforeKokoroCeiling() {
+    fun exactTokenBudgetStaysInQualityRangeCeiling() {
         val units = NarrationDirector.plan(
             "One sentence here. Another sentence follows. A third sentence arrives. A fourth continues. A fifth completes the thought."
         )
         val batches = NarrationBatcher.batch(units) { text -> text.length * 5 }
 
         assertTrue(batches.size >= 2)
-        assertTrue(batches.all { (it.modelTokenCount ?: 0) <= 440 || it.unitCount == 1 })
+        assertTrue(batches.all { (it.modelTokenCount ?: 0) <= 225 })
     }
 
     @Test
@@ -60,5 +59,4 @@ class NarrationBatcherTest {
         assertEquals(listOf(3L, 6L), batch.unitWordEnds)
         assertEquals(9L, batch.wordCount)
     }
-
 }

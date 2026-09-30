@@ -1,13 +1,14 @@
 package com.offlinenarrator.benchmark.book
 
-import java.util.Locale
-
 enum class NarrationCadence {
     NEUTRAL,
     REFLECTIVE,
     ACTION,
     HESITANT,
     DIALOGUE,
+    TENDER,
+    SOMBER,
+    TENSE,
 }
 
 data class ProsodyPlan(
@@ -16,53 +17,33 @@ data class ProsodyPlan(
 )
 
 /**
- * Small, deliberately restrained delivery changes. Playback speed selected by
- * the listener remains separate; this only changes how Kokoro phrases a batch.
+ * Converts the chapter-level performance plan into the tiny controls Kokoro
+ * actually exposes safely. The planner does the semantic work; this layer keeps
+ * the acoustic intervention intentionally restrained.
  */
 object NarrationProsody {
-    private val reflectiveWords = setOf(
-        "thought", "wondered", "remembered", "remember", "felt", "seemed",
-        "realized", "realised", "perhaps", "maybe", "memory", "dreamed",
-        "dreamt", "silence", "quietly", "slowly",
-    )
-
-    private val actionWords = setOf(
-        "ran", "rushed", "jumped", "grabbed", "threw", "struck", "fired",
-        "shouted", "screamed", "burst", "slammed", "charged", "dashed",
-        "fell", "hit", "kicked", "lunged",
-    )
-
     fun plan(batch: NarrationBatch): ProsodyPlan {
-        if (batch.deliveryCue == DeliveryCue.HESITATION) {
-            return ProsodyPlan(NarrationCadence.HESITANT, 0.975f)
+        val performance = batch.performance
+        val cadence = when (performance.mood) {
+            NarrationMood.REFLECTIVE -> NarrationCadence.REFLECTIVE
+            NarrationMood.TENDER -> NarrationCadence.TENDER
+            NarrationMood.SOMBER -> NarrationCadence.SOMBER
+            NarrationMood.HESITANT -> NarrationCadence.HESITANT
+            NarrationMood.TENSE,
+            NarrationMood.ANGRY,
+            NarrationMood.FEARFUL -> NarrationCadence.TENSE
+            NarrationMood.URGENT,
+            NarrationMood.LIGHT -> NarrationCadence.ACTION
+            NarrationMood.NEUTRAL -> if (batch.dialogueUnitCount > 0) {
+                NarrationCadence.DIALOGUE
+            } else {
+                NarrationCadence.NEUTRAL
+            }
         }
 
-        if (batch.role == NarrationRole.DIALOGUE) {
-            return ProsodyPlan(NarrationCadence.DIALOGUE, 1.0f)
-        }
-
-        val words = lexicalWords(batch.text)
-        if (words.isEmpty()) return ProsodyPlan(NarrationCadence.NEUTRAL, 1.0f)
-
-        val reflectiveHits = words.count { it in reflectiveWords }
-        val actionHits = words.count { it in actionWords }
-        val punctuationEnergy = batch.text.count { it == '!' || it == '—' }
-        val averageSentenceWords = words.size.toFloat() /
-            batch.text.count { it == '.' || it == '?' || it == '!' }.coerceAtLeast(1)
-
-        return when {
-            reflectiveHits >= 2 || (reflectiveHits >= 1 && batch.text.contains('…')) ->
-                ProsodyPlan(NarrationCadence.REFLECTIVE, 0.985f)
-
-            actionHits >= 2 && (averageSentenceWords <= 14f || punctuationEnergy >= 2) ->
-                ProsodyPlan(NarrationCadence.ACTION, 1.02f)
-
-            else -> ProsodyPlan(NarrationCadence.NEUTRAL, 1.0f)
-        }
+        return ProsodyPlan(
+            cadence = cadence,
+            synthesisSpeed = performance.synthesisSpeed.coerceIn(0.972f, 1.025f),
+        )
     }
-
-    private fun lexicalWords(text: String): List<String> = text
-        .lowercase(Locale.ROOT)
-        .split(Regex("[^\\p{L}']+"))
-        .filter { it.isNotBlank() }
 }

@@ -33,6 +33,7 @@ object SentenceSegmenter {
     fun split(
         text: String,
         singleNewlineIsParagraph: Boolean = false,
+        endOfInputIsParagraph: Boolean = true,
     ): List<Slice> {
         if (text.isBlank()) return emptyList()
 
@@ -96,7 +97,7 @@ object SentenceSegmenter {
         }
 
         if (start < source.length) {
-            emit(source.length, paragraphBreak = true)
+            emit(source.length, paragraphBreak = endOfInputIsParagraph)
         }
 
         return out

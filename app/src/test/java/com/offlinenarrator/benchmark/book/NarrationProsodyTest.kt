@@ -17,14 +17,19 @@ class NarrationProsodyTest {
                 deliveryCue = DeliveryCue.HESITATION,
                 boundaryAfter = NarrationBoundary.PARAGRAPH,
                 unitCount = 1,
+                performance = NarrationPerformance(
+                    mood = NarrationMood.HESITANT,
+                    confidence = 0.8f,
+                    synthesisSpeed = 0.982f,
+                ),
             )
         )
         assertEquals(NarrationCadence.HESITANT, plan.cadence)
-        assertTrue(plan.synthesisSpeed in 0.95f..1.0f)
+        assertTrue(plan.synthesisSpeed in 0.972f..1.0f)
     }
 
     @Test
-    fun dialogueDoesNotGetArtificialTempoActing() {
+    fun neutralDialogueDoesNotGetArtificialTempoActing() {
         val plan = NarrationProsody.plan(
             NarrationBatch(
                 text = "Where have you been?",
@@ -35,6 +40,12 @@ class NarrationProsodyTest {
                 deliveryCue = DeliveryCue.QUESTION,
                 boundaryAfter = NarrationBoundary.SENTENCE,
                 unitCount = 1,
+                dialogueUnitCount = 1,
+                performance = NarrationPerformance(
+                    mood = NarrationMood.NEUTRAL,
+                    confidence = 0.2f,
+                    synthesisSpeed = 1.0f,
+                ),
             )
         )
         assertEquals(1.0f, plan.synthesisSpeed)

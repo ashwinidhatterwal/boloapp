@@ -1,20 +1,22 @@
 # Bolo
 
-Current checkpoint: **v0.24 Novel Reader**
+Current checkpoint: **v0.25 Audiobook Compiler**
 
-Bolo is an offline long-form reader built around Kokoro with:
-- EPUB/PDF/DOCX/TXT/HTML import
-- indexed huge-book navigation
-- compact text-first audiobook player
-- chapter selection and tappable sentence playback
+Bolo is now a prepare-ahead offline audiobook compiler/player built around Kokoro.
+
+Current architecture:
+- EPUB/PDF/DOCX/TXT/HTML import and huge-book indexing
+- chapter-first narration planning before synthesis
+- real Kokoro-token chunking targeted at the model's 100–200-token quality range
 - punctuation-preserving Kokoro G2P
-- real Kokoro-token paragraph batching
-- adaptive leading/trailing silence normalization
-- acoustic sentence anchors inside batched audio
-- conservative dialogue-turn continuity
-- subtle narration cadence and character colour
-- Media3 background playback
+- scene/dialogue context with confidence-gated, restrained performance hints
+- one consistent narrator voice by default
+- automatic acoustic QC with one conservative retry for suspicious output
+- structural pause mastering and sentence anchors
+- current chapter is fully compiled before playback starts
+- Kokoro is idle while prepared chapter audio is playing
+- compact text-first Media3 reader/player
 
-GitHub artifact: `bolo-v0.24-novel-reader`
+GitHub artifact: `bolo-v0.25-audiobook-compiler`
 
-See `BOLO_V0.24_CHECKPOINT.md`.
+See `BOLO_V0.25_CHECKPOINT.md` and `NARRATION_COMPILER_DESIGN.md`.

@@ -190,6 +190,33 @@ enum class NarrationBoundary {
     CHAPTER,
 }
 
+enum class NarrationMood {
+    NEUTRAL,
+    REFLECTIVE,
+    TENSE,
+    URGENT,
+    TENDER,
+    SOMBER,
+    ANGRY,
+    FEARFUL,
+    LIGHT,
+    HESITANT,
+}
+
+/**
+ * A deliberately restrained performance hint. It is not an acting command.
+ * Low-confidence evidence is mixed back toward neutral so Bolo would rather
+ * underplay a line than confidently perform the wrong emotion.
+ */
+data class NarrationPerformance(
+    val mood: NarrationMood = NarrationMood.NEUTRAL,
+    val confidence: Float = 0f,
+    val energy: Float = 0.5f,
+    val tension: Float = 0.25f,
+    val warmth: Float = 0.5f,
+    val synthesisSpeed: Float = 1.0f,
+)
+
 data class NarrationUnit(
     /** Source text used for exact word/location accounting. */
     val text: String,
@@ -201,7 +228,8 @@ data class NarrationUnit(
     val speakerKey: String? = null,
     val deliveryCue: DeliveryCue = DeliveryCue.NEUTRAL,
     val boundaryAfter: NarrationBoundary = NarrationBoundary.SENTENCE,
-    /** Compatibility/diagnostic only; v0.23 no longer blindly appends it. */
+    val performance: NarrationPerformance = NarrationPerformance(),
+    /** Compatibility/diagnostic only; Natural Narrator never blindly appends it. */
     val pauseAfterMs: Int = 0,
 )
 
@@ -218,6 +246,10 @@ data class NarrationBatch(
     val modelTokenCount: Int? = null,
     /** Source-word offsets at spoken sentence boundaries inside this batch. */
     val unitWordEnds: List<Long> = emptyList(),
+    /** Context-derived performance averaged conservatively across this chunk. */
+    val performance: NarrationPerformance = NarrationPerformance(),
+    /** Number of dialogue units represented, including mixed narration/dialogue chunks. */
+    val dialogueUnitCount: Int = 0,
 )
 
 /**

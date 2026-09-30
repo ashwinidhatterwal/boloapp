@@ -69,9 +69,14 @@ object NarrationDirector {
             val slices = SentenceSegmenter.split(
                 span.text,
                 singleNewlineIsParagraph = singleNewlineIsParagraph,
+                endOfInputIsParagraph = false,
+            )
+            val spanEndsParagraph = leadingWhitespaceHasParagraphBreak(
+                span.afterContext,
+                singleNewlineIsParagraph,
             )
 
-            for (slice in slices) {
+            for ((sliceIndex, slice) in slices.withIndex()) {
                 if (slice.text.isBlank()) continue
 
                 if (NarrationTextNormalizer.isSceneMarker(slice.text)) {
@@ -106,7 +111,10 @@ object NarrationDirector {
                     role = if (span.dialogue) NarrationRole.DIALOGUE else NarrationRole.NARRATOR,
                     speakerKey = speaker,
                     deliveryCue = deliveryCue(sourceText),
-                    boundaryAfter = if (slice.paragraphBreakAfter) {
+                    boundaryAfter = if (
+                        slice.paragraphBreakAfter ||
+                        (sliceIndex == slices.lastIndex && spanEndsParagraph)
+                    ) {
                         NarrationBoundary.PARAGRAPH
                     } else {
                         NarrationBoundary.SENTENCE
@@ -141,7 +149,9 @@ object NarrationDirector {
                 ).also { nextWord += words }
             }
         }
-        return DialogueTurnMemory.resolve(located)
+        return NarrationPerformancePlanner.plan(
+            DialogueTurnMemory.resolve(located)
+        )
     }
 
     private fun wrapDialogueForSpeech(text: String): String {
@@ -239,6 +249,21 @@ object NarrationDirector {
             if (text[i] == expected) return i
         }
         return -1
+    }
+
+    private fun leadingWhitespaceHasParagraphBreak(
+        afterContext: String,
+        singleNewlineIsParagraph: Boolean,
+    ): Boolean {
+        var newlines = 0
+        for (ch in afterContext) {
+            if (ch == '\n') {
+                newlines += 1
+                continue
+            }
+            if (!ch.isWhitespace()) break
+        }
+        return newlines >= 2 || (singleNewlineIsParagraph && newlines >= 1)
     }
 
     private fun inferSpeaker(before: String, after: String): String? {

@@ -77,6 +77,13 @@ jobs:
           grep -q "accentWeight: Float = 0.08f" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
           ! grep -q "XNNPACK_" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
 
+          # v0.25 compiler invariants are checked again after app checkout.
+          test -f "$GITHUB_WORKSPACE/NARRATION_COMPILER_DESIGN.md"
+          grep -q "TARGET_MODEL_TOKENS = 165" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/book/NarrationBatcher.kt"
+          grep -q "MAX_MODEL_TOKENS = 225" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/book/NarrationBatcher.kt"
+          grep -q "AudiobookNarrationCompiler.planChapter" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/app/BookReaderRuntime.kt"
+          grep -q "WavQualityInspector.inspect" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/app/BookReaderRuntime.kt"
+
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
 
@@ -137,11 +144,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.24.1-Novel-Reader.apk
+          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.25-Audiobook-Compiler.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.24.1-novel-reader
-          path: build-artifacts/Bolo-v0.24.1-Novel-Reader.apk
+          name: bolo-v0.25-audiobook-compiler
+          path: build-artifacts/Bolo-v0.25-Audiobook-Compiler.apk
           if-no-files-found: error
