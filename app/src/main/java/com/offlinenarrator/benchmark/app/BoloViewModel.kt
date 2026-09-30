@@ -32,5 +32,9 @@ class BoloViewModel(application: Application) : AndroidViewModel(application) {
     fun previousChapter() = runtime.previousChapter()
     fun nextChapter() = runtime.nextChapter()
 
+    fun saveDirectorSettings(settings: com.offlinenarrator.benchmark.book.DirectorSettings) = runtime.saveDirectorSettings(settings)
+    fun prepareAhead(chapterCount: Int, chargingOnly: Boolean) = runtime.prepareAhead(chapterCount, chargingOnly)
+    fun cancelPreparation() = runtime.cancelPreparation()
+
     fun clearPreparedAudio() = runtime.clearPreparedAudio()
 }

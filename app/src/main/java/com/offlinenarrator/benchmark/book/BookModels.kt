@@ -215,6 +215,10 @@ data class NarrationPerformance(
     val tension: Float = 0.25f,
     val warmth: Float = 0.5f,
     val synthesisSpeed: Float = 1.0f,
+    val gainDb: Float = 0f,
+    val pauseScale: Float = 1f,
+    val intent: String = "",
+    val evidence: String = "",
 )
 
 data class NarrationUnit(

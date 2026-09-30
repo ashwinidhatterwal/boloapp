@@ -66,6 +66,8 @@ class BackgroundAudioController(
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var speed = 1.0f
+    var playbackError: String? = null
+        private set
 
     var started: Boolean = false
         private set
@@ -116,6 +118,10 @@ class BackgroundAudioController(
                         started = connected.mediaItemCount > 0
 
                         connected.addListener(object : Player.Listener {
+                            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                                playbackError = error.message ?: "Audio playback failed"
+                                onStateChanged()
+                            }
                             override fun onIsPlayingChanged(isPlaying: Boolean) {
                                 if (isPlaying) hasActuallyPlayed = true
                                 onStateChanged()
@@ -167,6 +173,7 @@ class BackgroundAudioController(
         c.clearMediaItems()
 
         started = false
+        playbackError = null
         inputComplete = false
         underruns = 0
         hasActuallyPlayed = false
@@ -265,6 +272,7 @@ class BackgroundAudioController(
         controller?.clearMediaItems()
 
         started = false
+        playbackError = null
         inputComplete = false
         underruns = 0
         hasActuallyPlayed = false
@@ -314,6 +322,25 @@ class BackgroundAudioController(
 
         c.seekTo(index, safe)
         onStateChanged()
+    }
+
+    fun seekToWord(bookId: String, chapterIndex: Int, word: Long, exactChunkPositionMs: Long = 0L): Boolean {
+        val c = controller ?: return false
+        for (index in 0 until c.mediaItemCount) {
+            val extras = c.getMediaItemAt(index).mediaMetadata.extras ?: continue
+            if (extras.getString(EXTRA_BOOK_ID) != bookId || extras.getInt(EXTRA_CHAPTER_INDEX) != chapterIndex) continue
+            val start = extras.getLong(EXTRA_SEGMENT_START_WORD)
+            val count = extras.getLong(EXTRA_SEGMENT_WORD_COUNT)
+            if (word < start || (word >= start + count && index < c.mediaItemCount - 1)) continue
+            val duration = extras.getLong(EXTRA_DURATION_MS)
+            val words = extras.getLongArray(EXTRA_WORD_ANCHORS) ?: LongArray(0)
+            val times = extras.getLongArray(EXTRA_TIME_ANCHORS) ?: LongArray(0)
+            val position = if (exactChunkPositionMs > 0 && word == start) exactChunkPositionMs
+                else com.offlinenarrator.benchmark.book.PreparedTimeline.timeForWord(word - start, count, duration, words, times)
+            c.seekTo(index, position.coerceIn(0, maxOf(0, duration - 50)))
+            onStateChanged(); return true
+        }
+        return false
     }
 
     fun bufferedSourceMs(): Long {

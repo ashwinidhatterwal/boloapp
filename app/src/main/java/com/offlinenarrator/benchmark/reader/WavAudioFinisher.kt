@@ -387,10 +387,10 @@ object WavAudioFinisher {
         ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.LITTLE_ENDIAN).int
 
     private fun shortLeUnsigned(bytes: ByteArray, offset: Int): Int =
-        ByteBuffer.wrap(bytes, offset, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
+        (bytes[offset].toInt() and 255) or ((bytes[offset + 1].toInt() and 255) shl 8)
 
     private fun shortLeSigned(bytes: ByteArray, offset: Int): Short =
-        ByteBuffer.wrap(bytes, offset, 2).order(ByteOrder.LITTLE_ENDIAN).short
+        ((bytes[offset].toInt() and 255) or (bytes[offset + 1].toInt() shl 8)).toShort()
 
     private fun putIntLe(bytes: ByteArray, offset: Int, value: Int) {
         ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(value)

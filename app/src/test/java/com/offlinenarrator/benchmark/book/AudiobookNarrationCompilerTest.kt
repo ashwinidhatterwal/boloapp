@@ -11,7 +11,7 @@ class AudiobookNarrationCompilerTest {
             "\"Don't wake him,\" Maya whispered softly. He nodded."
         )
         val dialogue = units.first { it.role == NarrationRole.DIALOGUE }
-        assertEquals(NarrationBoundary.SENTENCE, dialogue.boundaryAfter)
+        assertEquals(NarrationBoundary.CONTINUE, dialogue.boundaryAfter)
     }
 
     @Test

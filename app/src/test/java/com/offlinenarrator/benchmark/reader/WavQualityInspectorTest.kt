@@ -40,6 +40,22 @@ class WavQualityInspectorTest {
         }
     }
 
+    @Test fun truncatedPcmIsRejected() {
+        val file = wavFile(24_000, 1, 4_000)
+        try {
+            val bytes = file.readBytes(); file.writeBytes(bytes.copyOf(bytes.size - 400))
+            assertFalse(WavQualityInspector.inspect(file, 2, false).acceptable)
+        } finally { file.delete() }
+    }
+
+    @Test fun chapterPauseDoesNotMakeShortSpeechLookStretched() {
+        val file = wavFile(24_000, 2, 4_000)
+        try {
+            assertFalse(WavQualityInspector.inspect(file, 1, true).acceptable)
+            assertTrue(WavQualityInspector.inspect(file, 1, true, trailingSilenceMs = 1100).acceptable)
+        } finally { file.delete() }
+    }
+
     private fun wavFile(sampleRate: Int, seconds: Int, amplitude: Int): File {
         val sampleCount = sampleRate * seconds
         val pcmBytes = sampleCount * 2

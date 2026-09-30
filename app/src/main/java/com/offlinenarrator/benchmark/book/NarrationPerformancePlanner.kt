@@ -160,7 +160,18 @@ object NarrationPerformancePlanner {
     ): Evidence {
         val ownWords = words(unit.text)
         val nearbyWords = words("$before $after")
-        val all = ownWords + nearbyWords.take(48)
+        // Delivery evidence belongs to the attribution, not words a character
+        // merely mentions. Use only the immediate tag, avoid crossing turns.
+        val attribution = if (unit.role == NarrationRole.DIALOGUE) {
+            listOf(after, before).firstOrNull { text ->
+                text.length <= 180 && !text.contains('“') && !text.contains('"') &&
+                    Regex("\\b(said|asked|replied|whispered|shouted|murmured|snapped|pleaded|laughed|sobbed|sighed)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+            }.orEmpty()
+        } else ""
+        val all = words(attribution).filterIndexed { i, _ ->
+            val tagWords = words(attribution)
+            tagWords.take(i).takeLast(3).none { it in setOf("not", "never", "no", "wasn't", "isn't") }
+        }
 
         fun hasAny(values: Set<String>): Boolean = all.any { it in values }
         fun ownHas(values: Set<String>): Boolean = ownWords.any { it in values }
@@ -174,14 +185,14 @@ object NarrationPerformancePlanner {
             // only applied when the surrounding words support them.
             when {
                 hasAny(angryVerbs) || hasAny(angryAdverbs) ||
-                    (hasAny(loudVerbs) && (ownHas(angerWords) || nearbyWords.any { it in angerWords })) ->
+                    (hasAny(loudVerbs) && hasAny(angryAdverbs)) ->
                     return Evidence(NarrationMood.ANGRY, 0.92f, 0.78f, 0.78f, 0.22f)
 
                 hasAny(fearfulVerbs) ||
-                    (hasAny(whisperVerbs) && (ownHas(fearWords) || nearbyWords.any { it in fearWords })) ->
+                    (hasAny(whisperVerbs) && hasAny(tenseAdverbs)) ->
                     return Evidence(NarrationMood.FEARFUL, 0.88f, 0.48f, 0.78f, 0.32f)
 
-                hasAny(somberVerbs) || ownHas(somberWords) ->
+                hasAny(somberVerbs) ->
                     return Evidence(NarrationMood.SOMBER, 0.84f, 0.28f, 0.48f, 0.32f)
 
                 hasAny(lightVerbs) ->

@@ -8,3 +8,6 @@ local.properties
 *.aab
 *.onnx
 .DS_Store
+
+.deps/
+app/libs/*.aar

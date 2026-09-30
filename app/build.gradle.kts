@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 29
-        versionName = "0.11.0-audiobook-compiler"
+        versionCode = 30
+        versionName = "0.12.0-audiobook-studio"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -86,5 +86,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.11.1")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

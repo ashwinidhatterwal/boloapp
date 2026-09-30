@@ -103,8 +103,11 @@ new_create = """        val e = OrtEnvironment.getEnvironment()
             when (runtimeProfile) {
                 KokoroRuntimeProfile.CPU_BASELINE -> {
                     // Known-good reference profile from the earlier benchmark.
-                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                     setIntraOpNumThreads(availableCores.coerceAtMost(4))
+                    setInterOpNumThreads(1)
+                    addConfigEntry("session.intra_op.allow_spinning", "0")
+                    addConfigEntry("session.inter_op.allow_spinning", "0")
                 }
 
                 KokoroRuntimeProfile.CPU_ALL_8 -> {

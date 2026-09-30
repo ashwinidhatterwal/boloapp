@@ -31,6 +31,7 @@ object WavQualityInspector {
         file: File,
         wordCount: Long,
         allowLongPause: Boolean,
+        trailingSilenceMs: Long = 0L,
     ): NarrationQcReport {
         if (!file.isFile) return failed("audio file missing")
         val bytes = file.readBytes()
@@ -43,7 +44,8 @@ object WavQualityInspector {
         if (frames <= 0) return failed("empty PCM")
         val durationMs = frames.toLong() * 1000L / wav.sampleRate.toLong()
         val safeWords = wordCount.coerceAtLeast(1L)
-        val msPerWord = durationMs.toDouble() / safeWords.toDouble()
+        val spokenDurationMs = (durationMs - trailingSilenceMs.coerceIn(0L, durationMs)).coerceAtLeast(0L)
+        val msPerWord = spokenDurationMs.toDouble() / safeWords.toDouble()
 
         var peak = 0
         var sumSquares = 0.0
@@ -142,13 +144,17 @@ object WavQualityInspector {
 
         while (offset + 8 <= bytes.size) {
             val id = ascii(bytes, offset, 4)
-            val size = intLe(bytes, offset + 4).coerceAtLeast(0)
+            val size = intLe(bytes, offset + 4)
+            if (size < 0 || size > bytes.size - offset - 8) return null
             val payload = offset + 8
             if (payload > bytes.size) break
             when (id) {
                 "fmt " -> if (size >= 16 && payload + 16 <= bytes.size) {
+                    if (shortUnsigned(bytes, payload) != 1) return null
                     sampleRate = intLe(bytes, payload + 4)
                     blockAlign = shortUnsigned(bytes, payload + 12)
+                    val channels = shortUnsigned(bytes, payload + 2)
+                    if (channels !in 1..2 || blockAlign != channels * 2) return null
                     bitsPerSample = shortUnsigned(bytes, payload + 14)
                 }
                 "data" -> {
@@ -172,10 +178,10 @@ object WavQualityInspector {
         ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.LITTLE_ENDIAN).int
 
     private fun shortUnsigned(bytes: ByteArray, offset: Int): Int =
-        ByteBuffer.wrap(bytes, offset, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
+        (((bytes[offset].toInt() and 255) or (bytes[offset + 1].toInt() shl 8))).toShort().toInt() and 0xFFFF
 
     private fun shortLe(bytes: ByteArray, offset: Int): Short =
-        ByteBuffer.wrap(bytes, offset, 2).order(ByteOrder.LITTLE_ENDIAN).short
+        (((bytes[offset].toInt() and 255) or (bytes[offset + 1].toInt() shl 8))).toShort()
 
     private data class WavInfo(
         val sampleRate: Int,

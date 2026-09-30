@@ -52,7 +52,7 @@ object AudiobookNarrationCompiler {
             tokenCounter = tokenCounter,
         )
 
-        val sourceWords = units.sumOf { it.wordCount }
+        val sourceWords = countWords(dropWords(chapterText, startWord, checkpoints))
         val plannedWords = batches.sumOf { it.wordCount }
         val tokenCounts = batches.mapNotNull { batch ->
             batch.modelTokenCount ?: tokenCounter?.invoke(batch.text)

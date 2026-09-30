@@ -21,6 +21,7 @@ class BoloPlaybackService : MediaSessionService() {
                 true,
             )
             setHandleAudioBecomingNoisy(true)
+            setWakeMode(C.WAKE_MODE_LOCAL)
         }
         mediaSession = MediaSession.Builder(this, player).build()
     }

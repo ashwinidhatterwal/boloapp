@@ -16,6 +16,7 @@ object NarrationDirector {
         "murmured", "cried", "called", "yelled", "added", "continued",
         "remarked", "responded", "muttered", "exclaimed", "insisted",
         "warned", "promised", "admitted", "suggested", "told",
+        "snapped", "pleaded", "begged", "laughed", "sobbed", "sighed", "demanded", "retorted", "gasped",
     )
 
     private val speechVerbAlternation = speechVerbs.joinToString("|") { Regex.escape(it) }
@@ -59,6 +60,7 @@ object NarrationDirector {
                 sourceFormat.equals("HTML", true)
 
         val spans = splitQuotedSpans(remaining)
+        val sourceWordStarts = Regex("\\S+").findAll(remaining).map { it.range.first }.toList()
         val rawUnits = mutableListOf<RawUnit>()
 
         for (span in spans) {
@@ -76,7 +78,14 @@ object NarrationDirector {
                 singleNewlineIsParagraph,
             )
 
+            var sliceCursor = 0
             for ((sliceIndex, slice) in slices.withIndex()) {
+                val slicePattern = slice.text.split(Regex("\\s+")).joinToString("\\s+") { Regex.escape(it) }
+                val sourceMatch = Regex(slicePattern).find(span.text, sliceCursor)
+                    ?: error("Cannot map narration slice to source")
+                val sourceStart = span.sourceStart + sourceMatch.range.first
+                val sourceEnd = span.sourceStart + sourceMatch.range.last + 1
+                sliceCursor = sourceMatch.range.last + 1
                 if (slice.text.isBlank()) continue
 
                 if (NarrationTextNormalizer.isSceneMarker(slice.text)) {
@@ -88,6 +97,8 @@ object NarrationDirector {
                     }
                     // Keep location width but never pronounce "asterisk asterisk".
                     rawUnits += RawUnit(
+                        sourceStart = sourceStart,
+                        sourceEnd = sourceEnd,
                         text = slice.text,
                         spokenText = "",
                         role = NarrationRole.NARRATOR,
@@ -106,6 +117,8 @@ object NarrationDirector {
                 }
 
                 rawUnits += RawUnit(
+                    sourceStart = sourceStart,
+                    sourceEnd = sourceEnd,
                     text = sourceText,
                     spokenText = NarrationTextNormalizer.normalize(speechSource),
                     role = if (span.dialogue) NarrationRole.DIALOGUE else NarrationRole.NARRATOR,
@@ -116,6 +129,9 @@ object NarrationDirector {
                         (sliceIndex == slices.lastIndex && spanEndsParagraph)
                     ) {
                         NarrationBoundary.PARAGRAPH
+                    } else if (span.dialogue && !sourceText.trimEnd().trimEnd('"', '”', '’').endsWith(".") &&
+                        !sourceText.contains('?') && !sourceText.contains('!')) {
+                        NarrationBoundary.CONTINUE
                     } else {
                         NarrationBoundary.SENTENCE
                     },
@@ -132,8 +148,8 @@ object NarrationDirector {
 
         var nextWord = startWord
         val located = rawUnits.mapNotNull { raw ->
-            val words = countWords(raw.text)
-            if (words <= 0L) {
+            val words = sourceWordStarts.count { it >= raw.sourceStart && it < raw.sourceEnd }.toLong()
+            if (raw.text.isBlank()) {
                 null
             } else {
                 NarrationUnit(
@@ -189,10 +205,7 @@ object NarrationDirector {
                 sourceEnd += 1
             }
 
-            val dialogue = buildString {
-                append(text.substring(open + 1, close))
-                if (sourceEnd > close + 1) append(text.substring(close + 1, sourceEnd))
-            }
+            val dialogue = text.substring(open, sourceEnd)
 
             addSpan(
                 out = out,
@@ -225,6 +238,7 @@ object NarrationDirector {
         val beforeStart = (sourceStart - CONTEXT_CHARS).coerceAtLeast(0)
         val afterEnd = (sourceEnd + CONTEXT_CHARS).coerceAtMost(source.length)
         out += Span(
+            sourceStart = sourceStart + value.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0),
             text = cleaned,
             dialogue = dialogue,
             beforeContext = source.substring(beforeStart, sourceStart),
@@ -246,7 +260,17 @@ object NarrationDirector {
             else -> '"'
         }
         for (i in from until text.length) {
-            if (text[i] == expected) return i
+            if (text[i] == expected) {
+                if (expected == '’' && i > 0 && i + 1 < text.length &&
+                    text[i - 1].isLetterOrDigit() && text[i + 1].isLetterOrDigit()) continue
+                if (expected == '’' && i > 0 && text[i - 1] == 's') {
+                    val following = text.substring(i + 1).trimStart().takeWhile { it.isLetter() }
+                    if (following.firstOrNull()?.isLowerCase() == true &&
+                        following.lowercase(Locale.ROOT) !in speechVerbs &&
+                        following.lowercase(Locale.ROOT) !in setOf("he", "she", "they", "we", "and", "but", "or")) continue
+                }
+                return i
+            }
         }
         return -1
     }
@@ -314,6 +338,7 @@ object NarrationDirector {
     }
 
     private data class Span(
+        val sourceStart: Int,
         val text: String,
         val dialogue: Boolean,
         val beforeContext: String,
@@ -321,6 +346,8 @@ object NarrationDirector {
     )
 
     private data class RawUnit(
+        val sourceStart: Int,
+        val sourceEnd: Int,
         val text: String,
         val spokenText: String,
         val role: NarrationRole,

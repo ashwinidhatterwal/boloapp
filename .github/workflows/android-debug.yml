@@ -77,12 +77,12 @@ jobs:
           grep -q "accentWeight: Float = 0.08f" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
           ! grep -q "XNNPACK_" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
 
-          # v0.25 compiler invariants are checked again after app checkout.
+          # v0.26 compiler invariants are checked again after app checkout.
           test -f "$GITHUB_WORKSPACE/NARRATION_COMPILER_DESIGN.md"
           grep -q "TARGET_MODEL_TOKENS = 165" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/book/NarrationBatcher.kt"
           grep -q "MAX_MODEL_TOKENS = 225" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/book/NarrationBatcher.kt"
-          grep -q "AudiobookNarrationCompiler.planChapter" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/app/BookReaderRuntime.kt"
-          grep -q "WavQualityInspector.inspect" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/app/BookReaderRuntime.kt"
+          grep -q "AudiobookNarrationCompiler.planChapter" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/reader/ChapterPreparationCompiler.kt"
+          grep -q "WavQualityInspector.inspect" "$GITHUB_WORKSPACE/app/src/main/java/com/offlinenarrator/benchmark/reader/ChapterPreparationCompiler.kt"
 
           chmod +x gradlew scripts/fetch-espeak-data.sh
           ./scripts/fetch-espeak-data.sh
@@ -121,6 +121,9 @@ jobs:
               | grep -q "assets/voices/${voice_id}.bin"
           done
 
+          # Release the native dependency daemon before the app compiler/lint.
+          ./gradlew --stop
+
       - name: Set up Gradle 9.6
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -144,11 +147,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.25-Audiobook-Compiler.apk
+          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.26-Audiobook-Studio.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.25-audiobook-compiler
-          path: build-artifacts/Bolo-v0.25-Audiobook-Compiler.apk
+          name: bolo-v0.26-audiobook-studio
+          path: build-artifacts/Bolo-v0.26-Audiobook-Studio.apk
           if-no-files-found: error
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bolo-v0.26-validation-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore

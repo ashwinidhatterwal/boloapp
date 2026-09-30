@@ -110,11 +110,14 @@ object NarrationBatcher {
                 current += unit
             } else {
                 val previous = current.last()
-                val structuralBreak = previous.boundaryAfter in setOf(
-                    NarrationBoundary.PARAGRAPH,
-                    NarrationBoundary.SCENE,
-                    NarrationBoundary.CHAPTER,
-                )
+                val tinyDialogueBridge = previous.boundaryAfter == NarrationBoundary.PARAGRAPH &&
+                    (currentTokens() ?: Int.MAX_VALUE) < 20 &&
+                    previous.role == NarrationRole.DIALOGUE && unit.role == NarrationRole.DIALOGUE &&
+                    previous.performance.confidence < 0.60f && unit.performance.confidence < 0.60f
+                val structuralBreak = previous.boundaryAfter >= NarrationBoundary.PARAGRAPH && !tinyDialogueBridge
+                val incompatiblePerformance = previous.performance.confidence >= 0.65f &&
+                    unit.performance.confidence >= 0.65f &&
+                    previous.performance.mood != unit.performance.mood
 
                 val existingCount = currentTokens() ?: 0
                 val candidateValues = current + unit
@@ -129,13 +132,13 @@ object NarrationBatcher {
                         existingCount >= TARGET_MODEL_TOKENS
 
                 if (
-                    !structuralBreak &&
+                    !structuralBreak && !incompatiblePerformance &&
                     !wouldOvershootTarget &&
                     fits(candidate, spokenCount)
                 ) {
                     current += unit
                 } else if (
-                    !structuralBreak &&
+                    !structuralBreak && !incompatiblePerformance &&
                     !healthyEnoughToClose &&
                     fits(candidate, spokenCount)
                 ) {
@@ -150,7 +153,10 @@ object NarrationBatcher {
             }
 
             if (
-                unit.boundaryAfter == NarrationBoundary.PARAGRAPH ||
+                (unit.boundaryAfter == NarrationBoundary.PARAGRAPH &&
+                    !(unit.role == NarrationRole.DIALOGUE &&
+                      unit.performance.confidence < 0.60f &&
+                      (currentTokens() ?: Int.MAX_VALUE) < 20)) ||
                 unit.boundaryAfter == NarrationBoundary.SCENE ||
                 unit.boundaryAfter == NarrationBoundary.CHAPTER
             ) {
@@ -185,7 +191,7 @@ object NarrationBatcher {
         val out = mutableListOf<NarrationUnit>()
         var remaining = spoken
         var nextStartWord = unit.startWord
-        var remainingWords = unit.wordCount.coerceAtLeast(1L)
+        var remainingWords = unit.wordCount.coerceAtLeast(0L)
 
         while (remaining.isNotBlank() && tokenCounter(remaining) > MAX_MODEL_TOKENS) {
             val cut = bestCut(remaining, tokenCounter)
@@ -194,10 +200,12 @@ object NarrationBatcher {
             val piece = remaining.substring(0, cut).trim()
             if (piece.isBlank()) break
 
-            var pieceWords = countWords(piece).coerceAtLeast(1L)
-            if (remainingWords > 1L) {
-                pieceWords = pieceWords.coerceAtMost(remainingWords - 1L)
-            }
+            // A mid-word token cut owns no extra source word. Source width is
+            // allocated once; it must never grow during fragmentation.
+            val endsWithinWord = cut < remaining.length && !remaining[cut - 1].isWhitespace() &&
+                !remaining[cut].isWhitespace()
+            val pieceWords = (countWords(piece) - if (endsWithinWord) 1L else 0L)
+                .coerceIn(0L, remainingWords)
 
             out += unit.copy(
                 text = piece,
@@ -209,7 +217,7 @@ object NarrationBatcher {
             )
 
             nextStartWord += pieceWords
-            remainingWords = (remainingWords - pieceWords).coerceAtLeast(1L)
+            remainingWords = (remainingWords - pieceWords).coerceAtLeast(0L)
             remaining = remaining.substring(cut).trimStart()
         }
 
@@ -314,6 +322,9 @@ object NarrationBatcher {
             energy = weighted { it.energy }.coerceIn(0f, 1f),
             tension = weighted { it.tension }.coerceIn(0f, 1f),
             warmth = weighted { it.warmth }.coerceIn(0f, 1f),
+            gainDb = weighted { it.gainDb }.coerceIn(-2f, 1f),
+            pauseScale = weighted { it.pauseScale }.coerceIn(0.9f, 1.15f),
+            intent = strongest.intent, evidence = strongest.evidence,
             synthesisSpeed = weighted { it.synthesisSpeed }.coerceIn(0.972f, 1.025f),
         )
     }

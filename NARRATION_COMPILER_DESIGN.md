@@ -4,6 +4,12 @@ This document is the quality contract for Bolo's prepare-ahead narration path.
 Future changes should preserve these principles unless a listening test proves a
 better alternative.
 
+## Current implementation (v0.26)
+
+Durable manifests, compressed prepared audio, resumable scheduled preparation,
+stable seeking and an optional evidence-validated semantic director are now
+implemented. See BOLO_V0.26_CHECKPOINT.md for the current contract and limits.
+
 ## Product decision
 
 Bolo is no longer designed around continuous neural TTS during listening.
@@ -131,7 +137,9 @@ Kokoro does not expose a rich semantic emotion-control interface. Bolo therefore
 uses tiny synthesis-speed changes only, currently clamped to 0.972–1.025.
 Listener playback speed remains completely separate.
 
-Character timbre switching is disabled by default in the quality compiler. One
+Character timbre switching is disabled by default in the quality compiler.
+The optional semantic director may adjust bounded gain and structural pauses
+as well as speed; it cannot rewrite author text or create full emotional acting. One
 consistent narrator is preferred over abrupt synthetic voice changes.
 
 ### 6. Boundaries are hierarchical
@@ -187,9 +195,9 @@ v0.25 compiles the remainder of the selected chapter first. Only after the
 chapter is prepared does playback start. Kokoro is idle while that prepared
 chapter is playing.
 
-The next infrastructure milestone is persistent whole-book/selected-horizon
-preparation while charging/idle, plus speech-optimized compressed storage rather
-than long-term WAV storage.
+v0.26 implements selected-chapter, next-three and remaining-book preparation,
+charging constraints, durable per-chunk checkpoints and compressed M4A storage.
+Completed audio is user-owned and is not silently evicted.
 
 ## What “emotionally correct” means for Bolo
 

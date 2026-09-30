@@ -4,6 +4,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.offlinenarrator.benchmark.book.DirectorSettings
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,6 +113,9 @@ fun BoloScreen(viewModel: BoloViewModel) {
                 onPreviousChapter = viewModel::previousChapter,
                 onNextChapter = viewModel::nextChapter,
                 onClearCache = viewModel::clearPreparedAudio,
+                onPrepareAhead = viewModel::prepareAhead,
+                onCancelPreparation = viewModel::cancelPreparation,
+                onDirectorSettings = viewModel::saveDirectorSettings,
             )
         }
 
@@ -497,6 +506,9 @@ private fun ReaderScreen(
     onPreviousChapter: () -> Unit,
     onNextChapter: () -> Unit,
     onClearCache: () -> Unit,
+    onPrepareAhead: (Int, Boolean) -> Unit,
+    onCancelPreparation: () -> Unit,
+    onDirectorSettings: (DirectorSettings) -> Unit,
 ) {
     val book = state.activeBook ?: return
     val chapter = book.chapters.getOrNull(state.currentChapterIndex)
@@ -644,6 +656,9 @@ private fun ReaderScreen(
                 showGoToPage = true
             },
             onClearCache = onClearCache,
+            onPrepareAhead = onPrepareAhead,
+            onCancelPreparation = onCancelPreparation,
+            onDirectorSettings = onDirectorSettings,
         )
     }
 
@@ -813,7 +828,11 @@ private fun CompactReaderPlayer(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "${playerStateLabel(state).lowercase().replaceFirstChar { it.uppercase() }} · ${formatTime(state.bufferedListeningMs)} ready",
+                        if (state.isGenerating) {
+                            val percent = state.compilationFraction?.let { " ${(it * 100).toInt()}%" }.orEmpty()
+                            val eta = state.compilationEtaMs?.let { " · ~${formatTime(it)} left" }.orEmpty()
+                            "Preparing$percent$eta"
+                        } else "${playerStateLabel(state).lowercase().replaceFirstChar { it.uppercase() }} · ${formatTime(state.bufferedListeningMs)} ready",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -844,7 +863,7 @@ private fun CompactReaderPlayer(
 
                 Button(
                     onClick = onToggle,
-                    enabled = state.engineReady && state.playerReady &&
+                    enabled = state.modelPresent && state.playerReady &&
                         (!state.readerStarted || state.playbackStarted),
                     modifier = Modifier.size(50.dp),
                     shape = CircleShape,
@@ -885,11 +904,26 @@ private fun ReaderOptionsSheet(
     onPlus50: () -> Unit,
     onGoToPage: () -> Unit,
     onClearCache: () -> Unit,
+    onPrepareAhead: (Int, Boolean) -> Unit,
+    onCancelPreparation: () -> Unit,
+    onDirectorSettings: (DirectorSettings) -> Unit,
 ) {
+    var chargingOnly by remember { mutableStateOf(true) }
+    var showDirector by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
+    if (showDirector) DirectorSettingsDialog(state.directorSettings, { showDirector = false }) {
+        onDirectorSettings(it); showDirector = false
+    }
+    if (confirmClear) AlertDialog(onDismissRequest = { confirmClear = false },
+        title = { Text("Delete all prepared audio?") },
+        text = { Text("Imported books and reading positions stay. Audio will need preparation again.") },
+        confirmButton = { TextButton(onClick = { confirmClear = false; onClearCache() }) { Text("Delete audio") } },
+        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Keep audio") } })
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -946,7 +980,20 @@ private fun ReaderOptionsSheet(
             )
 
             HorizontalDivider()
-            ReaderDetailsCard(state = state, onClearCache = onClearCache)
+            Text("Prepare ahead", fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = chargingOnly, onCheckedChange = { chargingOnly = it })
+                Text("Only while charging")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = { onPrepareAhead(1, chargingOnly) }, enabled = !state.readerStarted) { Text("Chapter") }
+                OutlinedButton(onClick = { onPrepareAhead(3, chargingOnly) }, enabled = !state.readerStarted) { Text("Next 3") }
+                OutlinedButton(onClick = { onPrepareAhead(0, chargingOnly) }, enabled = !state.readerStarted) { Text("Book") }
+            }
+            Text("Completed audio is kept. Preparation pauses during playback and resumes through Android's scheduler.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = onCancelPreparation) { Text("Cancel queued preparation") }
+            TextButton(onClick = { showDirector = true }, enabled = !state.readerStarted) { Text("Narration intelligence & pronunciation") }
+            ReaderDetailsCard(state = state, onClearCache = { confirmClear = true })
 
             TextButton(
                 onClick = onStop,
@@ -1236,13 +1283,13 @@ private fun ReaderDetailsCard(
             }
 
             Text(
-                "Audiobook Compiler v1 analyses the chapter first, feeds Kokoro quality-range chunks, keeps uncertain emotion neutral, automatically retries suspicious audio, and finishes synthesis before playback begins.",
+                "Persistent chapter audio, automatic quality checks and resumable preparation. Deep semantic direction is optional; offline planning stays available.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-                "While prepared audio is playing, Kokoro is idle. Playback lives in Android's MediaSessionService, so lock-screen, notification and headset controls remain available without continuous neural generation.",
+                "Prepared playback unloads Kokoro. Word highlighting and sentence seeking use approximate silence anchors; they are not word-perfect speech alignment.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1313,3 +1360,33 @@ private fun formatBytes(bytes: Long): String =
     } else {
         String.format(Locale.US, "%.1f KB", bytes / 1024.0)
     }
+
+@Composable
+private fun DirectorSettingsDialog(current: DirectorSettings, onDismiss: () -> Unit, onSave: (DirectorSettings) -> Unit) {
+    var enabled by remember { mutableStateOf(current.enabled) }
+    var endpoint by remember { mutableStateOf(current.endpoint) }
+    var model by remember { mutableStateOf(current.model) }
+    var apiKey by remember { mutableStateOf(current.apiKey) }
+    var dictionary by remember { mutableStateOf(current.pronunciation) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Narration intelligence") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Semantic AI director", Modifier.weight(1f))
+                Switch(checked = enabled, onCheckedChange = { enabled = it })
+            }
+            Text("Optional: sends book text to your configured AI provider for scene, intent and speaker analysis. Provider charges may apply. Offline narration works with this switched off.", style = MaterialTheme.typography.bodySmall)
+            if (enabled) {
+                OutlinedTextField(endpoint, { endpoint = it }, label = { Text("HTTPS API base URL (including /v1)") }, singleLine = true)
+                OutlinedTextField(model, { model = it }, label = { Text("Model name") }, singleLine = true)
+                OutlinedTextField(apiKey, { apiKey = it }, label = { Text("API key") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation())
+            }
+            Text("Pronunciation dictionary", fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(dictionary, { dictionary = it }, label = { Text("One name=spoken form per line") }, minLines = 3)
+            Text("Dictionary changes affect speech only. Source text and reading positions stay intact. Changing voice or direction creates a new audio edition.", style = MaterialTheme.typography.bodySmall)
+        }
+    }, confirmButton = {
+        TextButton(onClick = { onSave(DirectorSettings(enabled, endpoint, model, apiKey, dictionary)) },
+            enabled = !enabled || (endpoint.startsWith("https://") && model.isNotBlank())) { Text("Save") }
+    }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
