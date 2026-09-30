@@ -17,8 +17,8 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        versionCode = 27
-        versionName = "0.10.0-novel-reader"
+        versionCode = 28
+        versionName = "0.10.0.1-novel-reader-dialogue-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

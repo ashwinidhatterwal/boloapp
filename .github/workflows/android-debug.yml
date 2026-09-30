@@ -137,11 +137,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.24-Novel-Reader.apk
+          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.24.1-Novel-Reader.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.24-novel-reader
-          path: build-artifacts/Bolo-v0.24-Novel-Reader.apk
+          name: bolo-v0.24.1-novel-reader
+          path: build-artifacts/Bolo-v0.24.1-Novel-Reader.apk
           if-no-files-found: error

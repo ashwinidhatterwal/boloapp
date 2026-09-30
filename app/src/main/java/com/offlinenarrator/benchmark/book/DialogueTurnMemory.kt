@@ -31,51 +31,45 @@ object DialogueTurnMemory {
         }
 
         return units.map { unit ->
-            if (
+            val closesContext =
                 unit.boundaryAfter == NarrationBoundary.SCENE ||
-                unit.boundaryAfter == NarrationBoundary.CHAPTER
-            ) {
-                val result = if (unit.role == NarrationRole.DIALOGUE) {
-                    unit.speakerKey?.let(::remember)
-                    lastDialogueSpeaker = unit.speakerKey ?: lastDialogueSpeaker
-                    narratorWordsSinceDialogue = 0L
-                    unit
-                } else unit
-                reset()
-                return@map result
-            }
+                    unit.boundaryAfter == NarrationBoundary.CHAPTER
 
-            if (unit.role == NarrationRole.NARRATOR) {
+            val resolved = if (unit.role == NarrationRole.NARRATOR) {
                 narratorWordsSinceDialogue += unit.wordCount
                 if (narratorWordsSinceDialogue > RESET_AFTER_NARRATOR_WORDS) reset()
-                return@map unit
-            }
-
-            val explicit = unit.speakerKey
-            if (explicit != null) {
-                remember(explicit)
-                lastDialogueSpeaker = explicit
-                narratorWordsSinceDialogue = 0L
-                return@map unit
-            }
-
-            val inferred = if (
-                recent.size == 2 &&
-                lastDialogueSpeaker != null &&
-                narratorWordsSinceDialogue <= MAX_NARRATOR_WORDS_BETWEEN_TURNS
-            ) {
-                recent.firstOrNull { it != lastDialogueSpeaker }
-            } else null
-
-            if (inferred != null) {
-                remember(inferred)
-                lastDialogueSpeaker = inferred
-                narratorWordsSinceDialogue = 0L
-                unit.copy(speakerKey = inferred)
-            } else {
-                narratorWordsSinceDialogue = 0L
                 unit
+            } else {
+                val explicit = unit.speakerKey
+                if (explicit != null) {
+                    remember(explicit)
+                    lastDialogueSpeaker = explicit
+                    narratorWordsSinceDialogue = 0L
+                    unit
+                } else {
+                    val inferred = if (
+                        recent.size == 2 &&
+                        lastDialogueSpeaker != null &&
+                        narratorWordsSinceDialogue <= MAX_NARRATOR_WORDS_BETWEEN_TURNS
+                    ) {
+                        recent.firstOrNull { it != lastDialogueSpeaker }
+                    } else null
+
+                    narratorWordsSinceDialogue = 0L
+                    if (inferred != null) {
+                        remember(inferred)
+                        lastDialogueSpeaker = inferred
+                        unit.copy(speakerKey = inferred)
+                    } else {
+                        unit
+                    }
+                }
             }
+
+            // Scene/chapter boundaries close the conversation only AFTER the
+            // current unit has had a chance to use the established turn state.
+            if (closesContext) reset()
+            resolved
         }
     }
 }

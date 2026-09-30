@@ -30,3 +30,7 @@ The reader is now text-first instead of card-first.
 ## Validation in this source package
 
 Pure Kotlin checks cover dialogue-turn inference, token-budgeted batching, source-word accounting, subtle prosody and adaptive WAV boundary handling. The Android/Compose build must still be confirmed by GitHub Actions after push.
+
+
+## v0.24.1 — dialogue boundary fix
+GitHub run #30 exposed a real scene-memory ordering bug: the final unattributed dialogue line in a chapter was reset before alternating-speaker inference. Conversation state is now resolved for the current unit first, then cleared after a scene/chapter boundary.
