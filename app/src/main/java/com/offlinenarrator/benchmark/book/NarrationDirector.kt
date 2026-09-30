@@ -123,7 +123,7 @@ object NarrationDirector {
         }
 
         var nextWord = startWord
-        return rawUnits.mapNotNull { raw ->
+        val located = rawUnits.mapNotNull { raw ->
             val words = countWords(raw.text)
             if (words <= 0L) {
                 null
@@ -141,6 +141,7 @@ object NarrationDirector {
                 ).also { nextWord += words }
             }
         }
+        return DialogueTurnMemory.resolve(located)
     }
 
     private fun wrapDialogueForSpeech(text: String): String {

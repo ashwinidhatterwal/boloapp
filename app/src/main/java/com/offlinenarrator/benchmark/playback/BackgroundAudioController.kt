@@ -25,7 +25,39 @@ data class PlaybackDescriptor(
     val chapterGlobalStart: Long,
     val durationMs: Long,
     val positionMs: Long,
-)
+    val wordAnchorOffsets: LongArray = LongArray(0),
+    val timeAnchorMs: LongArray = LongArray(0),
+) {
+    fun wordOffsetAtPosition(): Long {
+        if (segmentWordCount <= 0L || durationMs <= 0L) return 0L
+        if (wordAnchorOffsets.isEmpty() || wordAnchorOffsets.size != timeAnchorMs.size) {
+            val fraction = (positionMs.toDouble() / durationMs.toDouble()).coerceIn(0.0, 1.0)
+            return (segmentWordCount * fraction).toLong().coerceIn(0L, segmentWordCount)
+        }
+
+        var previousWord = 0L
+        var previousTime = 0L
+        for (i in timeAnchorMs.indices) {
+            val nextTime = timeAnchorMs[i].coerceIn(previousTime, durationMs)
+            val nextWord = wordAnchorOffsets[i].coerceIn(previousWord, segmentWordCount)
+            if (positionMs <= nextTime) {
+                val spanMs = (nextTime - previousTime).coerceAtLeast(1L)
+                val fraction = ((positionMs - previousTime).toDouble() / spanMs.toDouble())
+                    .coerceIn(0.0, 1.0)
+                return (previousWord + ((nextWord - previousWord) * fraction).toLong())
+                    .coerceIn(0L, segmentWordCount)
+            }
+            previousWord = nextWord
+            previousTime = nextTime
+        }
+
+        val spanMs = (durationMs - previousTime).coerceAtLeast(1L)
+        val fraction = ((positionMs - previousTime).toDouble() / spanMs.toDouble())
+            .coerceIn(0.0, 1.0)
+        return (previousWord + ((segmentWordCount - previousWord) * fraction).toLong())
+            .coerceIn(0L, segmentWordCount)
+    }
+}
 
 class BackgroundAudioController(
     private val context: Context,
@@ -152,6 +184,8 @@ class BackgroundAudioController(
         chapterGlobalStart: Long,
         segmentStartWord: Long,
         segmentWordCount: Long,
+        wordAnchorOffsets: LongArray = LongArray(0),
+        timeAnchorMs: LongArray = LongArray(0),
     ) {
         val c = controller ?: return
         val wasEnded = c.playbackState == Player.STATE_ENDED
@@ -164,6 +198,8 @@ class BackgroundAudioController(
             putLong(EXTRA_SEGMENT_START_WORD, segmentStartWord)
             putLong(EXTRA_SEGMENT_WORD_COUNT, segmentWordCount)
             putLong(EXTRA_DURATION_MS, durationMs)
+            putLongArray(EXTRA_WORD_ANCHORS, wordAnchorOffsets)
+            putLongArray(EXTRA_TIME_ANCHORS, timeAnchorMs)
         }
 
         val item = MediaItem.Builder()
@@ -313,6 +349,8 @@ class BackgroundAudioController(
             chapterGlobalStart = extras.getLong(EXTRA_CHAPTER_GLOBAL_START, 0L),
             durationMs = extras.getLong(EXTRA_DURATION_MS, 0L),
             positionMs = c.currentPosition.coerceAtLeast(0L),
+            wordAnchorOffsets = extras.getLongArray(EXTRA_WORD_ANCHORS) ?: LongArray(0),
+            timeAnchorMs = extras.getLongArray(EXTRA_TIME_ANCHORS) ?: LongArray(0),
         )
     }
 
@@ -333,5 +371,7 @@ class BackgroundAudioController(
         private const val EXTRA_SEGMENT_START_WORD = "bolo_segment_start_word"
         private const val EXTRA_SEGMENT_WORD_COUNT = "bolo_segment_word_count"
         private const val EXTRA_DURATION_MS = "bolo_duration_ms"
+        private const val EXTRA_WORD_ANCHORS = "bolo_word_anchors"
+        private const val EXTRA_TIME_ANCHORS = "bolo_time_anchors"
     }
 }

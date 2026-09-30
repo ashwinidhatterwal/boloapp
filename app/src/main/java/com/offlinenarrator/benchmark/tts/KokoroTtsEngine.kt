@@ -84,7 +84,7 @@ class KokoroTtsEngine(
     fun subtleCharacterVoiceId(
         narratorVoiceId: String,
         characterVoiceId: String,
-        accentWeight: Float = 0.14f,
+        accentWeight: Float = 0.08f,
     ): String {
         if (narratorVoiceId == characterVoiceId) return narratorVoiceId
         val percent = (accentWeight.coerceIn(0.05f, 0.30f) * 100f).toInt()
@@ -108,6 +108,11 @@ class KokoroTtsEngine(
         val accentVoiceId: String,
         val accentWeight: Float,
     )
+
+    fun countModelTokens(text: String): Int {
+        check(ready) { "Kokoro is not initialized" }
+        return KokoroTTS.countModelTokens(text)
+    }
 
     override fun release() {
         ready = false

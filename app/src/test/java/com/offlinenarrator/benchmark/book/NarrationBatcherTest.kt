@@ -41,4 +41,24 @@ class NarrationBatcherTest {
             a.speakerKey != b.speakerKey || a.speakerKey == null
         })
     }
+    @Test
+    fun exactTokenBudgetStopsBatchBeforeKokoroCeiling() {
+        val units = NarrationDirector.plan(
+            "One sentence here. Another sentence follows. A third sentence arrives. A fourth continues. A fifth completes the thought."
+        )
+        val batches = NarrationBatcher.batch(units) { text -> text.length * 5 }
+
+        assertTrue(batches.size >= 2)
+        assertTrue(batches.all { (it.modelTokenCount ?: 0) <= 440 || it.unitCount == 1 })
+    }
+
+    @Test
+    fun batchesRetainInternalSentenceWordAnchors() {
+        val units = NarrationDirector.plan("One two three. Four five six. Seven eight nine.")
+        val batch = NarrationBatcher.batch(units).single()
+
+        assertEquals(listOf(3L, 6L), batch.unitWordEnds)
+        assertEquals(9L, batch.wordCount)
+    }
+
 }

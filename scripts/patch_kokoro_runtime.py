@@ -632,3 +632,24 @@ tts_code = tts_code.replace(
 )
 
 tts_src.write_text(tts_code)
+
+
+# -------------------------------------------------------------------------
+# Natural Narrator v3: expose the exact punctuation-preserving token counter
+# so Bolo can plan semantic batches before synthesis rather than guessing from
+# character length.
+# -------------------------------------------------------------------------
+tts_src = Path("library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt")
+tts_code = tts_src.read_text()
+tts_code = tts_code.replace("tokenCount(", "countModelTokens(")
+tts_code = tts_code.replace(
+    "private fun countModelTokens(text: String): Int",
+    "fun countModelTokens(text: String): Int",
+)
+tts_code = tts_code.replace(
+    "accentWeight: Float = 0.14f",
+    "accentWeight: Float = 0.08f",
+)
+if "fun countModelTokens(text: String): Int" not in tts_code:
+    raise SystemExit("Failed to expose Kokoro token counter")
+tts_src.write_text(tts_code)

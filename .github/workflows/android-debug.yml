@@ -73,6 +73,8 @@ jobs:
           grep -q "chunkTextForModel" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
           grep -q "phonemizePreservingPunctuation" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
           grep -q "setVoiceBlend" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+          grep -q "fun countModelTokens" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
+          grep -q "accentWeight: Float = 0.08f" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
           ! grep -q "XNNPACK_" library/src/main/kotlin/dev/ffmpegkit/kokoro/KokoroTTS.kt
 
           chmod +x gradlew scripts/fetch-espeak-data.sh
@@ -135,11 +137,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.23-Natural-Narrator.apk
+          cp app/build/outputs/apk/debug/app-debug.apk             build-artifacts/Bolo-v0.24-Novel-Reader.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bolo-v0.23-natural-narrator
-          path: build-artifacts/Bolo-v0.23-Natural-Narrator.apk
+          name: bolo-v0.24-novel-reader
+          path: build-artifacts/Bolo-v0.24-Novel-Reader.apk
           if-no-files-found: error

@@ -1,39 +1,71 @@
 package com.offlinenarrator.benchmark.book
 
 /**
- * Groups compatible sentence units into model calls while keeping exact source
- * word spans. This restores paragraph context and amortizes ONNX fixed cost.
+ * Paragraph-aware, token-budgeted narration batching.
+ *
+ * Sentence locations stay independent for the reader UI, but compatible
+ * sentences are sent to Kokoro together so it can hear the surrounding thought
+ * and so ONNX startup cost is amortized. When [tokenCounter] is supplied the
+ * budget is based on the exact punctuation-preserving Kokoro tokenization.
  */
 object NarrationBatcher {
-    private const val MAX_BATCH_CHARS = 520
-    private const val MAX_UNITS = 4
+    private const val TARGET_MODEL_TOKENS = 380
+    private const val MAX_MODEL_TOKENS = 440
+    private const val MAX_UNITS = 8
+    private const val FALLBACK_MAX_CHARS = 680
 
-    fun batch(units: List<NarrationUnit>): List<NarrationBatch> {
+    fun batch(
+        units: List<NarrationUnit>,
+        tokenCounter: ((String) -> Int)? = null,
+    ): List<NarrationBatch> {
         if (units.isEmpty()) return emptyList()
 
         val out = mutableListOf<NarrationBatch>()
         val current = mutableListOf<NarrationUnit>()
 
+        fun spokenText(values: List<NarrationUnit>): String = values
+            .asSequence()
+            .map { it.spokenText.trim() }
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .trim()
+
+        fun tokenCount(text: String): Int? =
+            tokenCounter?.invoke(text)?.coerceAtLeast(0)
+
+        fun fits(candidate: String, spokenCount: Int): Boolean {
+            if (spokenCount > MAX_UNITS) return false
+            val exact = tokenCount(candidate)
+            return if (exact != null) exact <= MAX_MODEL_TOKENS
+            else candidate.length <= FALLBACK_MAX_CHARS
+        }
+
         fun flush() {
             if (current.isEmpty()) return
-
-            val spoken = current
-                .asSequence()
-                .map { it.spokenText.trim() }
-                .filter { it.isNotBlank() }
-                .joinToString(" ")
-                .trim()
-
+            val spoken = spokenText(current)
             if (spoken.isNotBlank()) {
+                val firstSpoken = current.first { it.spokenText.isNotBlank() }
+                val lastSpoken = current.last { it.spokenText.isNotBlank() }
+                var cumulativeSourceWords = 0L
+                val wordEnds = mutableListOf<Long>()
+                val spokenUnits = current.filter { it.spokenText.isNotBlank() }
+                current.forEach { unit ->
+                    cumulativeSourceWords += unit.wordCount
+                    if (unit.spokenText.isNotBlank() && unit !== spokenUnits.last()) {
+                        wordEnds += cumulativeSourceWords
+                    }
+                }
                 out += NarrationBatch(
                     text = spoken,
                     startWord = current.first().startWord,
                     wordCount = current.sumOf { it.wordCount },
-                    role = current.first { it.spokenText.isNotBlank() }.role,
-                    speakerKey = current.first { it.spokenText.isNotBlank() }.speakerKey,
-                    deliveryCue = current.last { it.spokenText.isNotBlank() }.deliveryCue,
+                    role = firstSpoken.role,
+                    speakerKey = firstSpoken.speakerKey,
+                    deliveryCue = lastSpoken.deliveryCue,
                     boundaryAfter = current.last().boundaryAfter,
-                    unitCount = current.count { it.spokenText.isNotBlank() },
+                    unitCount = spokenUnits.size,
+                    modelTokenCount = tokenCount(spoken),
+                    unitWordEnds = wordEnds,
                 )
             }
             current.clear()
@@ -51,17 +83,20 @@ object NarrationBatcher {
             if (current.isEmpty()) {
                 current += unit
             } else {
-                val previousSpoken = current.lastOrNull { it.spokenText.isNotBlank() }
-                val compatible = previousSpoken != null &&
-                    previousSpoken.boundaryAfter == NarrationBoundary.SENTENCE &&
-                    previousSpoken.role == unit.role &&
-                    previousSpoken.speakerKey == unit.speakerKey &&
-                    current.count { it.spokenText.isNotBlank() } < MAX_UNITS
+                val previous = current.lastOrNull { it.spokenText.isNotBlank() }
+                val compatible = previous != null &&
+                    previous.boundaryAfter in setOf(
+                        NarrationBoundary.CONTINUE,
+                        NarrationBoundary.SENTENCE,
+                    ) &&
+                    previous.role == unit.role &&
+                    previous.speakerKey == unit.speakerKey
 
-                val combinedChars = current.sumOf { it.spokenText.length } +
-                    unit.spokenText.length + current.size
+                val candidateValues = current + unit
+                val candidate = spokenText(candidateValues)
+                val spokenCount = candidateValues.count { it.spokenText.isNotBlank() }
 
-                if (compatible && combinedChars <= MAX_BATCH_CHARS) {
+                if (compatible && fits(candidate, spokenCount)) {
                     current += unit
                 } else {
                     flush()
@@ -69,12 +104,19 @@ object NarrationBatcher {
                 }
             }
 
+            // Structural boundaries are author intent. Never batch across them.
             if (
                 unit.boundaryAfter == NarrationBoundary.PARAGRAPH ||
                 unit.boundaryAfter == NarrationBoundary.SCENE ||
                 unit.boundaryAfter == NarrationBoundary.CHAPTER
             ) {
                 flush()
+            } else if (tokenCounter != null && current.isNotEmpty()) {
+                // Once a thought has reached a healthy context size, don't keep
+                // growing it just because the hard ceiling still has room.
+                val text = spokenText(current)
+                val count = tokenCount(text) ?: 0
+                if (count >= TARGET_MODEL_TOKENS) flush()
             }
         }
 

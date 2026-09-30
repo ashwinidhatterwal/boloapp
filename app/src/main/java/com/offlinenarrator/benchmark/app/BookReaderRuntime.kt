@@ -11,6 +11,7 @@ import com.offlinenarrator.benchmark.book.NarrationDirector
 import com.offlinenarrator.benchmark.book.NarrationBatcher
 import com.offlinenarrator.benchmark.book.NarrationBoundary
 import com.offlinenarrator.benchmark.book.NarrationPacing
+import com.offlinenarrator.benchmark.book.NarrationProsody
 import com.offlinenarrator.benchmark.book.NarrationRole
 import com.offlinenarrator.benchmark.book.ReaderLine
 import com.offlinenarrator.benchmark.book.SentenceSegmenter
@@ -751,13 +752,20 @@ class BookReaderRuntime private constructor(
                         0L
                     }
 
-                    val units = NarrationDirector.plan(
-                        chapterText = chapterText,
-                        startWord = chapterStartWord,
-                        checkpoints = chapter.checkpoints,
-                        sourceFormat = book.format,
-                    )
-                    val batches = NarrationBatcher.batch(units)
+                    val units = withContext(Dispatchers.Default) {
+                        NarrationDirector.plan(
+                            chapterText = chapterText,
+                            startWord = chapterStartWord,
+                            checkpoints = chapter.checkpoints,
+                            sourceFormat = book.format,
+                        )
+                    }
+                    val batches = withContext(Dispatchers.Default) {
+                        NarrationBatcher.batch(
+                            units = units,
+                            tokenCounter = engine::countModelTokens,
+                        )
+                    }
 
                     for ((batchIndex, batch) in batches.withIndex()) {
                         ensureActive()
@@ -807,8 +815,18 @@ class BookReaderRuntime private constructor(
                             boundary = effectiveBoundary,
                             cue = batch.deliveryCue,
                         )
-                        val cacheTextKey =
-                            "${batch.text}\u0000natural-boundary=${effectiveBoundary.name}:${timing.targetMs}"
+                        val prosody = NarrationProsody.plan(batch)
+                        val cacheTextKey = buildString {
+                            append(batch.text)
+                            append("\u0000natural-boundary=")
+                            append(effectiveBoundary.name)
+                            append(':')
+                            append(timing.targetMs)
+                            append("\u0000cadence=")
+                            append(prosody.cadence.name)
+                            append(':')
+                            append(prosody.synthesisSpeed)
+                        }
                         val cached = cache.get(
                             modelSha = modelSha,
                             voiceId = unitVoiceId,
@@ -826,7 +844,7 @@ class BookReaderRuntime private constructor(
                                         engine.synthesize(
                                             SpeechRequest(
                                                 text = batch.text,
-                                                speed = 1.0f,
+                                                speed = prosody.synthesisSpeed,
                                                 voiceId = unitVoiceId,
                                             )
                                         )
@@ -845,11 +863,11 @@ class BookReaderRuntime private constructor(
 
                             val result = synthesized.getOrThrow()
                             val boundaryResult = withContext(Dispatchers.IO) {
-                                WavAudioFinisher.normalizeTrailingSilence(
+                                WavAudioFinisher.normalizeBoundarySilence(
                                     file = result.audioFile,
-                                    minMs = timing.minMs,
-                                    targetMs = timing.targetMs,
-                                    maxMs = timing.maxMs,
+                                    minTrailingMs = timing.minMs,
+                                    targetTrailingMs = timing.targetMs,
+                                    maxTrailingMs = timing.maxMs,
                                 )
                             }
                             val finishedDurationMs =
@@ -867,6 +885,14 @@ class BookReaderRuntime private constructor(
                             )
                         }
 
+                        val acousticBoundaryTimes = withContext(Dispatchers.IO) {
+                            WavAudioFinisher.detectBoundaryTimes(
+                                file = prepared.file,
+                                wordEnds = batch.unitWordEnds,
+                                totalWords = batch.wordCount,
+                            )
+                        }
+
                         player.enqueue(
                             file = prepared.file,
                             durationMs = prepared.durationMs,
@@ -877,6 +903,8 @@ class BookReaderRuntime private constructor(
                             chapterGlobalStart = chapter.startWord,
                             segmentStartWord = batch.startWord,
                             segmentWordCount = batch.wordCount,
+                            wordAnchorOffsets = batch.unitWordEnds.toLongArray(),
+                            timeAnchorMs = acousticBoundaryTimes,
                         )
 
                         generatedSegments += batch.unitCount
@@ -1028,13 +1056,7 @@ class BookReaderRuntime private constructor(
             descriptor.bookId == active.id
         ) {
             chapterIndex = descriptor.chapterIndex
-            val fraction = if (descriptor.durationMs > 0L) {
-                descriptor.positionMs.toDouble() / descriptor.durationMs.toDouble()
-            } else {
-                0.0
-            }.coerceIn(0.0, 1.0)
-
-            val insideSegment = (descriptor.segmentWordCount * fraction).toLong()
+            val insideSegment = descriptor.wordOffsetAtPosition()
             globalWord = (
                 descriptor.chapterGlobalStart +
                     descriptor.segmentStartWord +
@@ -1154,14 +1176,7 @@ class BookReaderRuntime private constructor(
         val book = _state.value.activeBook ?: return
         if (descriptor.bookId != book.id) return
 
-        val fraction = if (descriptor.durationMs > 0L) {
-            descriptor.positionMs.toDouble() / descriptor.durationMs.toDouble()
-        } else {
-            0.0
-        }.coerceIn(0.0, 1.0)
-
-        val estimatedInsideSegment =
-            (descriptor.segmentWordCount * fraction).toLong()
+        val estimatedInsideSegment = descriptor.wordOffsetAtPosition()
 
         val globalWord = (
             descriptor.chapterGlobalStart +

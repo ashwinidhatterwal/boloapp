@@ -214,6 +214,10 @@ data class NarrationBatch(
     val deliveryCue: DeliveryCue,
     val boundaryAfter: NarrationBoundary,
     val unitCount: Int,
+    /** Exact Kokoro phoneme-token count when the engine is available. */
+    val modelTokenCount: Int? = null,
+    /** Source-word offsets at spoken sentence boundaries inside this batch. */
+    val unitWordEnds: List<Long> = emptyList(),
 )
 
 /**
